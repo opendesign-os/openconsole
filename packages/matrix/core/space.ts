@@ -28,9 +28,9 @@ export interface Point {
 
 type Vector = readonly [x: number, y: number, z: number, w: number];
 
-export const identity: Matrix = Object.freeze([
+export const identity: Matrix = [
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-] as const);
+];
 
 export function from(values: ArrayLike<number>): Matrix {
   if (values.length !== 16) {
@@ -70,7 +70,7 @@ export function scale(x: number, y: number, z: number): Matrix {
 
 export function rotate(angle: number, axis: Point): Matrix {
   const length = Math.hypot(axis.x, axis.y, axis.z);
-  if (length === 0) throw new RangeError("rotation axis has zero length");
+  if (length === 0) return identity;
 
   const x = axis.x / length;
   const y = axis.y / length;
@@ -98,7 +98,13 @@ export function rotate(angle: number, axis: Point): Matrix {
   ];
 }
 
-function transform(matrix: Matrix, [x, y, z, w]: Vector): Vector {
+function transform(
+  matrix: Matrix,
+  x: number,
+  y: number,
+  z: number,
+  w: number,
+): Vector {
   return [
     matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12] * w,
     matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13] * w,
@@ -109,17 +115,17 @@ function transform(matrix: Matrix, [x, y, z, w]: Vector): Vector {
 
 function product(outer: Matrix, inner: Matrix): Matrix {
   return [
-    ...transform(outer, [inner[0], inner[1], inner[2], inner[3]]),
-    ...transform(outer, [inner[4], inner[5], inner[6], inner[7]]),
-    ...transform(outer, [inner[8], inner[9], inner[10], inner[11]]),
-    ...transform(outer, [inner[12], inner[13], inner[14], inner[15]]),
+    ...transform(outer, inner[0], inner[1], inner[2], inner[3]),
+    ...transform(outer, inner[4], inner[5], inner[6], inner[7]),
+    ...transform(outer, inner[8], inner[9], inner[10], inner[11]),
+    ...transform(outer, inner[12], inner[13], inner[14], inner[15]),
   ];
 }
 
 export const multiply = (...matrices: readonly Matrix[]): Matrix =>
   matrices.reduce(product, identity);
 
-export function invert(matrix: Matrix): Matrix {
+export function invert(matrix: Matrix): Matrix | undefined {
   const s0 = matrix[0] * matrix[5] - matrix[1] * matrix[4];
   const s1 = matrix[0] * matrix[6] - matrix[2] * matrix[4];
   const s2 = matrix[0] * matrix[7] - matrix[3] * matrix[4];
@@ -133,7 +139,7 @@ export function invert(matrix: Matrix): Matrix {
   const c4 = matrix[9] * matrix[15] - matrix[11] * matrix[13];
   const c5 = matrix[10] * matrix[15] - matrix[11] * matrix[14];
   const determinant = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0;
-  if (determinant === 0) throw new RangeError("matrix is not invertible");
+  if (determinant === 0) return undefined;
 
   return [
     (matrix[5] * c5 - matrix[6] * c4 + matrix[7] * c3) / determinant,
@@ -177,7 +183,7 @@ export function apply(
   target?: Float64Array,
 ): Point | Float64Array {
   if (!(input instanceof Float64Array)) {
-    const [x, y, z, w] = transform(matrix, [input.x, input.y, input.z, 1]);
+    const [x, y, z, w] = transform(matrix, input.x, input.y, input.z, 1);
     const weight = w === 0 ? 1 : w;
     return { x: x / weight, y: y / weight, z: z / weight };
   }

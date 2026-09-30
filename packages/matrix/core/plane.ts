@@ -15,13 +15,13 @@ export interface Point {
 }
 
 export interface Parts {
-  readonly position: Point;
+  readonly translation: Point;
   readonly scale: Point;
   readonly rotation: number;
   readonly skew: number;
 }
 
-export const identity: Matrix = Object.freeze([1, 0, 0, 1, 0, 0] as const);
+export const identity: Matrix = [1, 0, 0, 1, 0, 0];
 
 export function from(values: ArrayLike<number>): Matrix {
   if (values.length !== 6) {
@@ -100,9 +100,9 @@ function product(outer: Matrix, inner: Matrix): Matrix {
 export const multiply = (...matrices: readonly Matrix[]): Matrix =>
   matrices.reduce(product, identity);
 
-export function invert([a, b, c, d, e, f]: Matrix): Matrix {
+export function invert([a, b, c, d, e, f]: Matrix): Matrix | undefined {
   const determinant = a * d - b * c;
-  if (determinant === 0) throw new RangeError("matrix is not invertible");
+  if (determinant === 0) return undefined;
   return [
     d / determinant,
     -b / determinant,
@@ -155,7 +155,7 @@ export function decompose([a, b, c, d, e, f]: Matrix): Parts {
   const x = Math.hypot(a, b);
   const determinant = a * d - b * c;
   return {
-    position: { x: e, y: f },
+    translation: { x: e, y: f },
     scale: { x, y: x === 0 ? 0 : determinant / x },
     rotation: Math.atan2(b, a),
     skew: determinant === 0 ? 0 : Math.atan((a * c + b * d) / determinant),
@@ -164,7 +164,7 @@ export function decompose([a, b, c, d, e, f]: Matrix): Parts {
 
 export const compose = (parts: Parts): Matrix =>
   multiply(
-    translate(parts.position.x, parts.position.y),
+    translate(parts.translation.x, parts.translation.y),
     rotate(parts.rotation),
     skew(parts.skew),
     scale(parts.scale.x, parts.scale.y),

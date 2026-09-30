@@ -2,11 +2,12 @@
   "name": "@openconsole/matrix",
   "version": "0.0.1",
   "private": true,
-  "description": "二维仿射与三维齐次变换矩阵：定长只读元组、纯函数、与 CSS transform 互通",
+  "description": "二维仿射与三维射影变换矩阵：定长只读元组、纯函数、与 CSS transform 互通",
   "license": "MIT",
   "keywords": [
     "matrix",
     "affine",
+    "projective",
     "transform",
     "matrix3d",
     "geometry",
