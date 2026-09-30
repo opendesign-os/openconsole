@@ -157,7 +157,7 @@ core/
 ## 开发
 
 ```bash
-pnpm --filter @openconsole/queue typecheck  # tsc --noEmit
+pnpm --filter @openconsole/queue typecheck  # tsc
 ```
 
 ## License

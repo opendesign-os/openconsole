@@ -604,8 +604,7 @@ pnpm --filter @openconsole/graph test              # 单元 + 集成
 pnpm --filter @openconsole/graph test:unit         # 只跑 tests/unit
 pnpm --filter @openconsole/graph test:integration  # 只跑 tests/integration
 pnpm --filter @openconsole/graph bench             # tests/bench
-pnpm --filter @openconsole/graph typecheck         # tsc --noEmit
-pnpm --filter @openconsole/graph doc               # typedoc，输出到 docs/（已 gitignore）
+pnpm --filter @openconsole/graph typecheck         # tsc
 ```
 
 ```

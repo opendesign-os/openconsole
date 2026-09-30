@@ -6,7 +6,6 @@
   "sideEffects": [
     "**/*.css"
   ],
-  "main": "./index.ts",
   "exports": {
     ".": "./index.ts",
     "./styles.css": "./styles.css"
@@ -20,8 +19,8 @@
     "README.md"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit"
+    "typecheck": "tsc",
+    "check": "tsc"
   },
   "peerDependencies": {
     "@assistant-ui/react": "*",
@@ -77,8 +76,8 @@
     "@assistant-ui/react-mcp": "^0.0.15",
     "@assistant-ui/react-syntax-highlighter": "^0.14.2",
     "@assistant-ui/store": "^0.2.18",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "beautiful-mermaid": "^1.1.3",
     "diff": "^9.0.0",

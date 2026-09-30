@@ -21,38 +21,23 @@
     "directory": "packages/graph"
   },
   "type": "module",
-  "main": "index.ts",
-  "types": "index.ts",
   "sideEffects": false,
   "exports": {
-    ".": {
-      "types": "./index.ts",
-      "default": "./index.ts"
-    },
-    "./algorithm": {
-      "types": "./core/algorithm/index.ts",
-      "default": "./core/algorithm/index.ts"
-    },
-    "./serialize": {
-      "types": "./core/serialize/index.ts",
-      "default": "./core/serialize/index.ts"
-    }
+    ".": "./index.ts",
+    "./algorithm": "./core/algorithm/index.ts",
+    "./serialize": "./core/serialize/index.ts"
   },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "bench": "vitest bench --run",
-    "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && vitest run",
-    "doc": "typedoc"
+    "bench": "vitest bench --run --reporter=verbose",
+    "typecheck": "tsc",
+    "check": "tsc && vitest run"
   },
   "dependencies": {
     "@openconsole/queue": "workspace:*",
     "@openconsole/signal": "workspace:*"
-  },
-  "devDependencies": {
-    "typedoc": "^0.28.0"
   }
 }

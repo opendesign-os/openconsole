@@ -36,10 +36,10 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "pnpm clean && tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "tsc --noEmit && vitest run",
+    "check": "tsc && vitest run",
     "dev": "tsx src/bin.ts openmcp.yaml"
   },
   "dependencies": {
@@ -48,10 +48,9 @@
     "yaml": "^2.7.0"
   },
   "devDependencies": {
-    "@openconsole/tsconfig": "workspace:*",
-    "@types/express": "^5.0.0",
-    "@types/node": "^25.4.0",
-    "tsx": "^4.23.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
     "zod": "^4.4.3"
   }
 }

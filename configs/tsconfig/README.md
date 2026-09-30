@@ -1,154 +1,38 @@
 # @openconsole/tsconfig
 
-OpenDesign TypeScript 配置预设包，提供分层配置的 TypeScript 编译选项。
+OpenConsole 的 TypeScript 7 配置预设。每个包只继承一个预设,预设之间单链继承,不做数组叠加。
 
-## 安装
+## 预设
 
-```bash
-npm install @openconsole/tsconfig -D
-# 或
-pnpm add @openconsole/tsconfig -D
-# 或
-yarn add @openconsole/tsconfig -D
-```
-
-## 使用方式
-
-### 基础环境
+| 预设     | 继承   | 内容                                                                                               | 使用方                                       |
+| -------- | ------ | -------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `base`   | —      | `target: esnext`、`noEmit`、`isolatedModules`、`skipLibCheck`、未使用 / 隐式返回 / switch 贯穿检查 | 其余预设                                     |
+| `strict` | `base` | `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`                                           | graph、heap、matrix、plugable、queue、signal |
+| `node`   | `base` | `types: ["node"]`                                                                                  | mcp、nacos                                   |
+| `react`  | `base` | `jsx: "react-jsx"`                                                                                 | atoms、shadcn                                |
 
 ```json
 {
-  "extends": "@openconsole/tsconfig/base"
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@openconsole/tsconfig/strict"
 }
 ```
 
-### 浏览器环境
+## 为什么这么少
 
-```json
-{
-  "extends": "@openconsole/tsconfig/browser"
-}
-```
+TypeScript 7 的默认值已经覆盖了过去需要显式声明的大部分选项,预设只写与默认值不同的部分:
 
-### Node.js 环境
+| 选项                                               | TypeScript 7 默认                          |
+| -------------------------------------------------- | ------------------------------------------ |
+| `strict`                                           | `true`                                     |
+| `module` / `moduleResolution`                      | `esnext` / `bundler`                       |
+| `types`                                            | `[]`,全局类型需按预设或包显式声明          |
+| `forceConsistentCasingInFileNames`                 | `true`                                     |
+| `esModuleInterop` / `allowSyntheticDefaultImports` | 恒为 `true`,不可关闭                       |
+| `lib`                                              | 由 `target` 推导;`dom` 已含 `dom.iterable` |
 
-```json
-{
-  "extends": "@openconsole/tsconfig/node"
-}
-```
-
-### React + Vite
-
-```json
-{
-  "extends": "@openconsole/tsconfig/react"
-}
-```
-
-### Vue + Vite
-
-```json
-{
-  "extends": "@openconsole/tsconfig/vue"
-}
-```
-
-### Next.js
-
-```json
-{
-  "extends": "@openconsole/tsconfig/next"
-}
-```
-
-### Nuxt.js
-
-```json
-{
-  "extends": "@openconsole/tsconfig/nuxt"
-}
-```
-
-### Electron
-
-```json
-{
-  "extends": "@openconsole/tsconfig/electron"
-}
-```
-
-## 组合使用
-
-### React 组件库
-
-```json
-{
-  "extends": [
-    "@openconsole/tsconfig/react",
-    "@openconsole/tsconfig/lib"
-  ]
-}
-```
-
-### Vite + React 应用
-
-```json
-{
-  "extends": [
-    "@openconsole/tsconfig/react",
-    "@openconsole/tsconfig/app"
-  ]
-}
-```
-
-### Node.js API 服务
-
-```json
-{
-  "extends": [
-    "@openconsole/tsconfig/node",
-    "@openconsole/tsconfig/lib"
-  ]
-}
-```
-
-## 配置继承链
-
-```
-base.json
-    ↑
-browser.json    ←→    node.json
-    ↑                         ↑
-vite.json                   electron.json
-    ↑                         ↑
-react.json ← vue.json ← nuxt.json    node16.json
-    ↑
-next.json
-```
-
-## 可用配置
-
-| 配置 | 说明 |
-|------|------|
-| `base` | 通用基础配置 |
-| `strict` | 严格模式配置 |
-| `browser` | 浏览器基础环境 |
-| `vite` | Vite 构建工具 |
-| `node` | Node.js 环境 (18.x+) |
-| `node16` | Node.js 16 |
-| `react` | React + Vite |
-| `next` | Next.js |
-| `vue` | Vue + Vite |
-| `nuxt` | Nuxt.js |
-| `electron` | Electron |
-| `lib` | 类库开发 |
-| `app` | 应用开发 |
-| `test` | 测试配置 |
-| `monorepo` | Monorepo 根项目 |
-| `modules/commonjs` | CommonJS 输出 |
-| `modules/esm` | ESM 输出 |
-| `modules/umd` | UMD 输出 |
+包内 `include` 默认是整个包目录,无需声明;只有目录里另有产物时才显式列出(如 mcp 的 `dist`)。
+需要产出文件的包自己覆盖 `noEmit` 并声明输出选项(见 mcp 的 `tsconfig.build.json`)。
 
 ## License
 

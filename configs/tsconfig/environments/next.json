@@ -1,8 +1,0 @@
-{
-  "extends": "./browser.json",
-  "compilerOptions": {
-    "target": "ES2022",
-    "jsx": "react-jsx",
-    "types": ["next"]
-  }
-}

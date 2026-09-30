@@ -477,7 +477,7 @@ npx shadcn@latest add "https://r.assistant-ui.com/<name>.json"   # 例：thread�
 pnpm install && pnpm typecheck
 ```
 
-> 升级时若 upstream 用了 ES2023+ API（如 `Array.toReversed()` → 改 `[...x].reverse()`），或 effect 出现「部分路径 return 值、部分隐式落空」，需手改以满足本包严格 tsconfig（`target ES2022` / `noImplicitReturns`）。改完 `pnpm typecheck` 应为 0 报错。
+> 升级时若 effect 出现「部分路径 return 值、部分隐式落空」，需手改以满足本包 tsconfig 的 `noImplicitReturns`。改完 `pnpm typecheck` 应为 0 报错。
 
 ## 与 shadcn/ui CLI 的差异
 

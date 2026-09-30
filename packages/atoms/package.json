@@ -18,13 +18,8 @@
   "sideEffects": [
     "**/*.css"
   ],
-  "main": "./index.ts",
-  "types": "./index.ts",
   "exports": {
-    ".": {
-      "types": "./index.ts",
-      "default": "./index.ts"
-    },
+    ".": "./index.ts",
     "./styles.css": "./styles.css"
   },
   "files": [
@@ -39,8 +34,8 @@
     "node": ">=22.11.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit"
+    "typecheck": "tsc",
+    "check": "tsc"
   },
   "peerDependencies": {
     "@openconsole/shadcn": "workspace:*",
@@ -56,7 +51,7 @@
     "tailwindcss": "^4.0.0"
   },
   "devDependencies": {
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3"
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
   }
 }

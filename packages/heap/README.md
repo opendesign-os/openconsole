@@ -196,7 +196,7 @@ core/
 ## 开发
 
 ```bash
-pnpm --filter @openconsole/heap typecheck   # tsc --noEmit
+pnpm --filter @openconsole/heap typecheck   # tsc
 ```
 
 ## License

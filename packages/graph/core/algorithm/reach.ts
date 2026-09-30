@@ -21,12 +21,12 @@ export function reachable(
     return false;
   }
   if (source === target) return true;
-  const { offset, other } = structure.outbound;
-  const inbound = structure.inbound;
-  if (inbound === undefined) {
+  if (structure.inbound === undefined) {
     for (const node of dfs(structure, source)) if (node === target) return true;
     return false;
   }
+  const { offset, other } = structure.outbound;
+  const inbound = structure.inbound;
 
   const forward = new Uint8Array(order);
   const backward = new Uint8Array(order);

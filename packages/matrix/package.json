@@ -1,20 +1,22 @@
 {
-  "name": "@openconsole/queue",
+  "name": "@openconsole/matrix",
   "version": "0.0.1",
   "private": true,
-  "description": "面向整数下标的优先队列：惰性二叉堆与 Dial 桶队列",
+  "description": "二维仿射与三维齐次变换矩阵：定长只读元组、纯函数、与 CSS transform 互通",
   "license": "MIT",
   "keywords": [
-    "priority-queue",
-    "bucket-queue",
-    "dial",
-    "dijkstra",
+    "matrix",
+    "affine",
+    "transform",
+    "matrix3d",
+    "geometry",
+    "css",
     "typescript"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cosmic-gao/openconsole.git",
-    "directory": "packages/queue"
+    "directory": "packages/matrix"
   },
   "type": "module",
   "sideEffects": false,

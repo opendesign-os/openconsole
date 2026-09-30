@@ -1,26 +1,8 @@
 {
   "name": "@openconsole/tsconfig",
   "version": "1.0.0",
-  "type": "module",
   "exports": {
-    "./base": "./base.json",
-    "./strict": "./strict.json",
-    "./browser": "./environments/browser.json",
-    "./vite": "./environments/vite.json",
-    "./node": "./environments/node.json",
-    "./node16": "./environments/node16.json",
-    "./react": "./environments/react.json",
-    "./next": "./environments/next.json",
-    "./vue": "./environments/vue.json",
-    "./nuxt": "./environments/nuxt.json",
-    "./electron": "./environments/electron.json",
-    "./lib": "./packages/lib.json",
-    "./app": "./packages/app.json",
-    "./test": "./packages/test.json",
-    "./monorepo": "./packages/monorepo.json",
-    "./cjs": "./modules/commonjs.json",
-    "./esm": "./modules/esm.json",
-    "./umd": "./modules/umd.json"
+    "./*": "./*.json"
   },
   "keywords": [
     "typescript",
@@ -28,21 +10,5 @@
     "config",
     "openconsole"
   ],
-  "license": "MIT",
-  "peerDependencies": {
-    "@types/node": ">=18",
-    "@vitejs/plugin-vue": ">=5",
-    "react": ">=18",
-    "react-dom": ">=18",
-    "vite": ">=5"
-  },
-  "devDependencies": {
-    "@types/node": "^25.4.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-vue": "^6.0.4",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "vite": "^7.3.1"
-  }
+  "license": "MIT"
 }

@@ -62,10 +62,7 @@ const stripDebugger = definePlugin<BuildHooks>({
   name: "strip-debugger",
   enforce: "post",
   setup(api) {
-    api.hooks.transform.tap(
-      { filter: { id: /\.[jt]sx?$/ }, stage: Stage.post },
-      (_input, output) => void (output.code = output.code.replace(/\bdebugger;?/g, "")),
-    );
+    api.hooks.transform.tap({ filter: { id: /\.[jt]sx?$/ }, stage: Stage.post }, (_input, output) => void (output.code = output.code.replace(/\bdebugger;?/g, "")));
   },
 });
 ```
@@ -127,10 +124,10 @@ TypeError: hook "resolveId" 是同步的,tap "oops" 却返回了 Promise
 
 `filter` 与 `HookMap` 解决的是同一件事的两端，**分工看 key 空间**：
 
-| | 派发一次的代价 | 适合 |
-| --- | --- | --- |
-| `filter` | n 次谓词判断 | 几个条件就分完（`.ts` vs `.css`） |
-| `HookMap` | 一次查表 | key 稀疏且基数大（按命令名 / 事件名 / 扩展名） |
+|           | 派发一次的代价 | 适合                                           |
+| --------- | -------------- | ---------------------------------------------- |
+| `filter`  | n 次谓词判断   | 几个条件就分完（`.ts` vs `.css`）              |
+| `HookMap` | 一次查表       | key 稀疏且基数大（按命令名 / 事件名 / 扩展名） |
 
 ```ts
 const hooks = {
@@ -350,7 +347,7 @@ core/
 ## 开发
 
 ```bash
-pnpm --filter @openconsole/plugable check   # tsc --noEmit + vitest run
+pnpm --filter @openconsole/plugable check   # tsc + vitest run
 pnpm --filter @openconsole/plugable test
 ```
 
