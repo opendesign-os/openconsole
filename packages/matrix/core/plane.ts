@@ -1,18 +1,8 @@
+import type * as types from "./types";
 import { numbers, rounded } from "./values";
 
-export type Matrix = readonly [
-  a: number,
-  b: number,
-  c: number,
-  d: number,
-  e: number,
-  f: number,
-];
-
-export interface Point {
-  readonly x: number;
-  readonly y: number;
-}
+type Matrix = types.Matrix<2, "affine">;
+type Point = types.Point<2>;
 
 export interface Parts {
   readonly translation: Point;

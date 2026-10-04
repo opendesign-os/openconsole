@@ -5,8 +5,8 @@
 ## 特性
 
 - **维数 × 类别**:每个组合一个命名空间——`plane`(二维仿射,6 个数)、`space`(三维射影,16 个数),调用处不做运行时分派
-- **共享契约** `Algebra<Matrix, Point>`:各组合的共有成员同名同义,由编译器校验;与维数无关的代码写一次,传入 `plane` 或 `space` 即可
-- **定长只读元组**:`plane.Matrix` / `space.Matrix` 的元素名与 CSS / `DOMMatrix` 一致(`a`–`f`、`m11`–`m44`),可直接解构与序列化
+- **泛型类型** `Matrix<D, C>` / `Point<D>`:按维数 `D` 与类别 `C` 查表得到具体类型,由使用方显式配置,如 `Matrix<2, "affine">`
+- **定长只读元组**:元素名与 CSS / `DOMMatrix` 一致(`a`–`f`、`m11`–`m44`),可直接解构与序列化
 - **纯函数**:所有运算返回新矩阵,从不修改入参;`identity` 是共享的只读常量
 - **CSS 互通**:`format` 输出 `matrix()` / `matrix3d()`,`parse` 读回(含 `none`)
 - **批量变换**:`apply` 直接处理交错存放的 `Float64Array` 坐标,循环内零分配
@@ -26,19 +26,19 @@
 ## 维数 × 类别
 
 参照 Eigen 的 `Transform<Scalar, Dim, Mode>` 与 nalgebra 的 `Transform<T, C, D>`:变换由维数与类别共同确定,二者决定存储布局、`apply` 的语义与求逆算法。
-每个组合是一个命名空间,使用定长元组与手写的运算内核,不做 `Matrix<N>` 式的通用循环实现;
-组合之间的共有成员由 `Algebra` 契约约束。
+类型是泛型 `Matrix<D, C>`,按维数与类别查表得到具体元组;实现则固定,每个组合一个命名空间,使用定长元组与手写的运算内核,
+不做 `Matrix<N>` 式的通用循环实现。
 
-|      | 仿射               | 射影                |
-| ---- | ------------------ | ------------------- |
-| 二维 | `plane`:2×3,6 个数 | —                   |
-| 三维 | —                  | `space`:4×4,16 个数 |
+|          | 仿射 `"affine"`                          | 射影 `"projective"`                           |
+| -------- | ---------------------------------------- | --------------------------------------------- |
+| 二维 `2` | `plane`:`Matrix<2, "affine">`,2×3,6 个数 | —                                             |
+| 三维 `3` | —                                        | `space`:`Matrix<3, "projective">`,4×4,16 个数 |
 
 - **仿射**:末行恒为 `0 … 0 1`,只存上方 D 行(Eigen 的 `AffineCompact`);`apply` 无需除法,不能表达透视
 - **射影**:存完整的 (D+1)×(D+1) 矩阵,不做假设(Eigen 的 `Projective`);`apply` 按齐次分量 `w` 做透视除法
 - **仿射 ⊂ 射影**(nalgebra 的 `TAffine ⊂ TProjective`):向更一般的组合转换总能成功,用显式函数完成,如 `space.lift`
 
-新增组合(如三维仿射、二维射影)时,新建一个命名空间,并在 `index.ts` 以 `satisfies Algebra<Matrix, Point>` 登记。
+新增组合(如三维仿射、二维射影)时,先在 `core/types.ts` 的类型表中登记其元组,再新建一个命名空间实现它。
 
 ## 约定
 
@@ -110,27 +110,48 @@ space.parse("matrix(1, 0, 0, 1, 10, 20)"); // 二维文本自动提升
 space.lift(plane.translate(10, 20)); // 显式提升
 ```
 
-### 与维数无关的代码
+### 配置维数
 
-依赖 `Algebra` 契约而非具体组合,同一段代码对 `plane` 与 `space` 都成立:
+`Matrix<D, C>` 与 `Point<D>` 由使用方给出具体的维数与类别:
 
 ```ts
-import { plane, space, type Algebra } from "@openconsole/matrix";
+import { plane, space, type Matrix, type Point } from "@openconsole/matrix";
 
-function locate<Matrix, Point>(algebra: Algebra<Matrix, Point>, chain: readonly Matrix[], point: Point): Point | undefined {
-  const inverse = algebra.invert(algebra.multiply(...chain));
-  return inverse && algebra.apply(inverse, point);
+const view: Matrix<2, "affine"> = plane.scale(2);
+const corner: Point<3> = space.apply(space.identity, { x: 1, y: 1, z: 0 });
+```
+
+自己的泛型代码以 `Dimension` 与 `Category<D>` 约束类型参数,使用处同样显式给出:
+
+```ts
+import { plane, type Category, type Dimension, type Matrix } from "@openconsole/matrix";
+
+interface Layer<D extends Dimension, C extends Category<D>> {
+  readonly transform: Matrix<D, C>;
 }
 
-locate(plane, [parent, child], { x: 120, y: 80 }); // 世界坐标 → child 的局部坐标
-locate(space, [scene, model], { x: 120, y: 80, z: 0 });
+const layer: Layer<2, "affine"> = { transform: plane.identity };
 ```
 
 ## API
 
-### `interface Algebra<Matrix, Point>`
+### 类型
 
-各组合共享的契约(基本变换的签名随维数而异,不在此约束):
+| 类型           | 说明                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `Dimension`    | 已实现的维数:`2 \| 3`                                                                  |
+| `Category<D>`  | 维数 `D` 下已实现的类别:`Category<2>` 为 `"affine"`,`Category<Dimension>` 为全部类别   |
+| `Matrix<D, C>` | 维数 `D`、类别 `C` 的矩阵元组;未实现的组合(如 `Matrix<2, "projective">`)不通过类型检查 |
+| `Point<D>`     | `D` 维点:`Point<2>` 为 `{ x, y }`,`Point<3>` 为 `{ x, y, z }`                          |
+
+- 参数为联合时得到各组合的联合:`Matrix<Dimension, Category<Dimension>>` 即任意矩阵
+- 矩阵是普通元组,不携带维数与类别,编译器无法从值反推 `D`、`C`:泛型函数省略类型参数时按约束退化为任意矩阵,
+  需要限定维数时显式给出,如 `same<2, "affine">(left, right)`
+- 泛型代码中的 `Matrix<D, C>` 是只读数值数组,可读取与遍历;变换运算须确定维数后交给对应的命名空间
+
+### 共有成员
+
+`plane` 与 `space` 同名同义的成员:
 
 | 成员                             | 说明                                                                      |
 | -------------------------------- | ------------------------------------------------------------------------- |
@@ -149,15 +170,15 @@ locate(space, [scene, model], { x: 120, y: 80, z: 0 });
 
 各组合的差异(`translate` / `scale` / `rotate` 同名,签名随维数而异):
 
-|             | `plane`             | `space`                           |
-| ----------- | ------------------- | --------------------------------- |
-| `Matrix`    | 6 元组 `a`–`f`      | 16 元组 `m11`–`m44`               |
-| `Point`     | `{ x, y }`          | `{ x, y, z }`                     |
-| `translate` | `(x, y)`            | `(x, y, z)`                       |
-| `scale`     | `(x, y = x)`        | `(x, y, z)`                       |
-| `rotate`    | `(angle)`           | `(angle, axis)`,轴无需归一化      |
-| `format`    | `matrix(…)`         | `matrix3d(…)`                     |
-| `parse`     | `none`、`matrix(…)` | 另含 `matrix3d(…)`,二维文本会提升 |
+|             | `plane`                              | `space`                                       |
+| ----------- | ------------------------------------ | --------------------------------------------- |
+| 矩阵        | `Matrix<2, "affine">`:6 元组 `a`–`f` | `Matrix<3, "projective">`:16 元组 `m11`–`m44` |
+| 点          | `Point<2>`:`{ x, y }`                | `Point<3>`:`{ x, y, z }`                      |
+| `translate` | `(x, y)`                             | `(x, y, z)`                                   |
+| `scale`     | `(x, y = x)`                         | `(x, y, z)`                                   |
+| `rotate`    | `(angle)`                            | `(angle, axis)`,轴无需归一化                  |
+| `format`    | `matrix(…)`                          | `matrix3d(…)`                                 |
+| `parse`     | `none`、`matrix(…)`                  | 另含 `matrix3d(…)`,二维文本会提升             |
 
 ### 仅 `plane`
 
@@ -196,15 +217,15 @@ locate(space, [scene, model], { x: 120, y: 80, z: 0 });
 - `space.multiply` 把外矩阵依次作用于内矩阵的四列,列结果以元组展开拼接,类型上仍是 16 元组。
 - **`identity` 不冻结**:冻结数组在 V8 中的元素类型与普通数组不同,一旦流入乘法等内核,元素读取随之退化,
   实测慢数倍;只读由类型保证。
-- **契约由编译器校验**:`index.ts` 以 `satisfies Algebra<Matrix, Point>` 登记每个组合,
-  共有成员的签名一旦漂移,`tsc` 即报错。
+- **类型表**:`core/types.ts` 以 `Matrices`、`Points` 登记各组合的元组与点;`Category<D>`、`Matrix<D, C>` 是分配式条件类型,
+  参数为联合时逐个维数查表,泛型代码中的约束因此仍是元组的联合;`plane`、`space` 在文件内把各自的组合绑定为本地的 `Matrix` 与 `Point`。
 
 ## 模块边界
 
 ```
-index.ts       - 导出各组合,并以 satisfies 登记到契约
+index.ts       - 导出 plane、space 与类型
 core/
-├── algebra.ts - 各组合共享的契约 Algebra
+├── types.ts   - 类型表与 Matrix、Point、Dimension、Category
 ├── values.ts  - 读取 CSS 函数参数、按小数位取整(内部)
 ├── plane.ts   - 二维仿射
 └── space.ts   - 三维射影;依赖 plane 做提升与解析

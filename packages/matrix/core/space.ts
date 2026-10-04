@@ -1,30 +1,9 @@
 import * as plane from "./plane";
+import type * as types from "./types";
 import { numbers, rounded } from "./values";
 
-export type Matrix = readonly [
-  m11: number,
-  m12: number,
-  m13: number,
-  m14: number,
-  m21: number,
-  m22: number,
-  m23: number,
-  m24: number,
-  m31: number,
-  m32: number,
-  m33: number,
-  m34: number,
-  m41: number,
-  m42: number,
-  m43: number,
-  m44: number,
-];
-
-export interface Point {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-}
+type Matrix = types.Matrix<3, "projective">;
+type Point = types.Point<3>;
 
 type Vector = readonly [x: number, y: number, z: number, w: number];
 
@@ -56,7 +35,7 @@ export function from(values: ArrayLike<number>): Matrix {
   ];
 }
 
-export function lift([a, b, c, d, e, f]: plane.Matrix): Matrix {
+export function lift([a, b, c, d, e, f]: types.Matrix<2, "affine">): Matrix {
   return [a, b, 0, 0, c, d, 0, 0, 0, 0, 1, 0, e, f, 0, 1];
 }
 
