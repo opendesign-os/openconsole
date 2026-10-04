@@ -39,6 +39,15 @@ export function lift([a, b, c, d, e, f]: types.Matrix<2, "affine">): Matrix {
   return [a, b, 0, 0, c, d, 0, 0, 0, 0, 1, 0, e, f, 0, 1];
 }
 
+export const flatten = (matrix: Matrix): types.Matrix<2, "affine"> => [
+  matrix[0],
+  matrix[1],
+  matrix[4],
+  matrix[5],
+  matrix[12],
+  matrix[13],
+];
+
 export function translate(x: number, y: number, z: number): Matrix {
   return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
 }

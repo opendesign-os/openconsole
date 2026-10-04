@@ -1,0 +1,33 @@
+{
+  "name": "@openconsole/draggable",
+  "version": "0.0.1",
+  "private": true,
+  "description": "指针拖拽：以三维矩阵为载体的插件、共享事件委托、基于 matrix 的精确跟手",
+  "license": "MIT",
+  "keywords": [
+    "drag",
+    "draggable",
+    "pointer",
+    "matrix",
+    "plugin",
+    "dom",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cosmic-gao/openconsole.git",
+    "directory": "packages/draggable"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "check": "tsc"
+  },
+  "dependencies": {
+    "@openconsole/matrix": "workspace:*"
+  }
+}

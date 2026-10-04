@@ -108,6 +108,7 @@ space.format(tilt); // "matrix3d(…)"
 
 space.parse("matrix(1, 0, 0, 1, 10, 20)"); // 二维文本自动提升
 space.lift(plane.translate(10, 20)); // 显式提升
+space.flatten(tilt); // 取 xy 平面上的二维仿射部分
 ```
 
 ### 配置维数
@@ -192,15 +193,18 @@ const layer: Layer<2, "affine"> = { transform: plane.identity };
 
 ### 仅 `space`
 
-| 成员           | 说明                 |
-| -------------- | -------------------- |
-| `lift(matrix)` | 把二维仿射提升为三维 |
+| 成员              | 说明                                                       |
+| ----------------- | ---------------------------------------------------------- |
+| `lift(matrix)`    | 把二维仿射提升为三维                                       |
+| `flatten(matrix)` | `lift` 的逆向:取 xy 平面上的二维仿射部分,丢弃 z 与透视分量 |
 
 ## 行为说明
 
 - **退化不抛异常**:行列式为 0 时 `invert` 返回 `undefined`(同 nalgebra 的 `try_inverse`);零长度旋转轴按
   CSS `rotate3d()` 的规定不旋转,得到 `identity`。
 - **透视除法**:`space.apply` 按齐次分量 `w` 做除法;`w` 为 0 时跳过除法(同 nalgebra),避免产生无穷大。
+- **压平是正交投影**:`flatten` 对不含透视的三维仿射矩阵,在 xy 平面内精确;含透视时只是近似。
+  `flatten(lift(m))` 恒等于 `m`。
 - **分解的约定**:`decompose` 把反射归入 `scale.y`(`scale.x` 恒非负);退化矩阵的旋转与斜切取 0。
 - **`pinch` 的退化**:起始两点重合时退化为纯平移。
 - **只有输入不合法才抛异常**:`from` 与 `parse` 的元素个数不符抛 `RangeError`,其余文本格式错误抛 `SyntaxError`;
