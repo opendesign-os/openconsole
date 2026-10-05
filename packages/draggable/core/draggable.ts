@@ -1,47 +1,44 @@
-import { plane, space, type Matrix, type Point } from "@openconsole/matrix";
+import { space, type Matrix } from "@openconsole/matrix";
 
+import { bounds } from "../plugins/bounds";
+import { grid } from "../plugins/grid";
+import { gridlines } from "../plugins/gridlines";
 import { frame } from "./frame";
 import { bind } from "./pointer";
+import { Tracker, type Options, type Plugin } from "./tracker";
 
-export interface Context {
-  readonly matrix: Matrix<3, "projective">;
-  readonly origin: Matrix<3, "projective">;
-  readonly node: HTMLElement;
-  readonly event: PointerEvent;
+export interface DraggableOptions extends Options<PointerEvent> {
+  grid?: number;
+  snap?: boolean;
+  lines?: boolean;
 }
 
-export interface Plugin {
-  onStart?(context: Context): void;
-  onMove?(context: Context): Matrix<3, "projective"> | void;
-  onEnd?(context: Context): void;
-}
-
-export interface Options {
-  matrix?: Matrix<3, "projective">;
-  use?: readonly Plugin[];
+interface Settings {
+  readonly grid: number;
+  readonly snap: boolean;
+  readonly lines: boolean;
+  readonly use: readonly Plugin<PointerEvent>[];
 }
 
 export class Draggable {
   readonly node: HTMLElement;
-  #matrix: Matrix<3, "projective">;
-  #plugins: readonly Plugin[];
-  #active: readonly Plugin[] = [];
-  #origin: Matrix<3, "projective"> = space.identity;
-  #frame: Matrix<2, "affine"> = plane.identity;
-  #anchor: Point<2> = { x: 0, y: 0 };
+  readonly #tracker: Tracker<PointerEvent>;
+  #settings: Settings;
   #hint = "";
-  #dragging = false;
   readonly #touch: string;
   readonly #release: () => void;
 
-  constructor(node: HTMLElement, options: Options = {}) {
+  constructor(node: HTMLElement, options: DraggableOptions = {}) {
+    const { matrix, ...settings } = options;
     this.node = node;
-    this.#matrix =
-      options.matrix ?? space.parse(getComputedStyle(node).transform);
-    this.#plugins = options.use ?? [];
+    this.#settings = { grid: 0, snap: true, lines: true, use: [], ...settings };
+    this.#tracker = new Tracker({
+      matrix: matrix ?? space.parse(getComputedStyle(node).transform),
+      use: this.#plugins(),
+    });
     this.#touch = node.style.touchAction;
     node.style.touchAction = "none";
-    if (options.matrix) this.#render();
+    if (matrix) this.#render();
     this.#release = bind(node, {
       start: (event) => this.#start(event),
       move: (event) => this.#move(event),
@@ -50,23 +47,27 @@ export class Draggable {
   }
 
   get matrix(): Matrix<3, "projective"> {
-    return this.#matrix;
+    return this.#tracker.matrix;
   }
 
   get dragging(): boolean {
-    return this.#dragging;
+    return this.#tracker.dragging;
   }
 
-  update(options: Options): void {
-    if (options.use) this.#plugins = options.use;
-    if (options.matrix && !this.#dragging) {
-      this.#matrix = options.matrix;
-      this.#render();
+  update(options: DraggableOptions): void {
+    const { matrix, ...settings } = options;
+    if (Object.keys(settings).length > 0) {
+      this.#settings = { ...this.#settings, ...settings };
+      this.#tracker.update({ use: this.#plugins() });
     }
+    if (!matrix) return;
+    this.#tracker.update({ matrix });
+    this.#render();
   }
 
   destroy(): void {
     this.#release();
+    this.#tracker.destroy();
     this.node.style.touchAction = this.#touch;
   }
 
@@ -74,47 +75,42 @@ export class Draggable {
     this.destroy();
   }
 
-  #context(matrix: Matrix<3, "projective">, event: PointerEvent): Context {
-    return { matrix, origin: this.#origin, node: this.node, event };
-  }
-
   #start(event: PointerEvent): void {
-    this.#dragging = true;
-    this.#active = this.#plugins;
-    this.#origin = this.#matrix;
-    this.#frame = frame(this.node);
-    this.#anchor = { x: event.clientX, y: event.clientY };
     this.#hint = this.node.style.willChange;
     this.node.style.willChange = "transform";
-    const context = this.#context(this.#matrix, event);
-    for (const plugin of this.#active) plugin.onStart?.(context);
+    this.#tracker.start(event, frame(this.node));
   }
 
   #move(event: PointerEvent): void {
-    const delta = plane.apply(this.#frame, {
-      x: event.clientX - this.#anchor.x,
-      y: event.clientY - this.#anchor.y,
-    });
-    let matrix = space.multiply(
-      space.translate(delta.x, delta.y, 0),
-      this.#origin,
-    );
-    for (const plugin of this.#active) {
-      const next = plugin.onMove?.(this.#context(matrix, event));
-      if (next) matrix = next;
-    }
-    this.#matrix = matrix;
+    this.#tracker.move(event);
     this.#render();
   }
 
   #end(event: PointerEvent): void {
-    this.#dragging = false;
     this.node.style.willChange = this.#hint;
-    const context = this.#context(this.#matrix, event);
-    for (const plugin of this.#active) plugin.onEnd?.(context);
+    this.#tracker.end(event);
   }
 
   #render(): void {
-    this.node.style.transform = space.format(this.#matrix);
+    this.node.style.transform = space.format(this.#tracker.matrix);
+  }
+
+  #plugins(): readonly Plugin<PointerEvent>[] {
+    const { grid: step, snap, lines, use } = this.#settings;
+    const node = this.node;
+    const container = step > 0 ? node.offsetParent : null;
+    if (!(container instanceof HTMLElement)) return use;
+    const inside = bounds(() => ({
+      left: -node.offsetLeft,
+      top: -node.offsetTop,
+      right: container.clientWidth - node.offsetWidth - node.offsetLeft,
+      bottom: container.clientHeight - node.offsetHeight - node.offsetTop,
+    }));
+    return [
+      ...(snap ? [grid(step)] : []),
+      inside,
+      ...(lines ? [gridlines(container, step)] : []),
+      ...use,
+    ];
   }
 }

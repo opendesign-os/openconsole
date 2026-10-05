@@ -1,0 +1,20 @@
+{
+  "name": "@openconsole/draggable-examples",
+  "version": "0.0.1",
+  "private": true,
+  "description": "@openconsole/draggable 的演示：Vite 开发服务器，按框架分目录",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc",
+    "check": "tsc"
+  },
+  "dependencies": {
+    "@openconsole/draggable": "workspace:*",
+    "@openconsole/matrix": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.3.1"
+  }
+}

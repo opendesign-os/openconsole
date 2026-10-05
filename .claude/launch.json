@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "draggable-examples",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@openconsole/draggable-examples", "dev"],
+      "port": 5173
+    }
+  ]
+}

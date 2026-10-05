@@ -1,27 +1,14 @@
 import { plane, space, type Matrix } from "@openconsole/matrix";
 
-const units = new Map([
-  ["deg", Math.PI / 180],
-  ["grad", Math.PI / 200],
-  ["rad", 1],
-  ["turn", 2 * Math.PI],
-]);
-
 const axes = new Map([
   ["x", { x: 1, y: 0, z: 0 }],
   ["y", { x: 0, y: 1, z: 0 }],
-  ["z", { x: 0, y: 0, z: 1 }],
 ]);
-
-function radians(text: string): number {
-  const unit = /[a-z]+$/i.exec(text)?.[0].toLowerCase() ?? "deg";
-  return Number.parseFloat(text) * (units.get(unit) ?? 0);
-}
 
 function rotation(text: string): Matrix<3, "projective"> {
   if (text === "none") return space.identity;
-  const parts = text.trim().split(/\s+/);
-  const angle = radians(parts.at(-1) ?? "");
+  const parts = text.split(" ");
+  const angle = (Number.parseFloat(parts.at(-1) ?? "") * Math.PI) / 180;
   const axis =
     parts.length === 4
       ? { x: Number(parts[0]), y: Number(parts[1]), z: Number(parts[2]) }
@@ -29,30 +16,34 @@ function rotation(text: string): Matrix<3, "projective"> {
   return space.rotate(angle, axis);
 }
 
-const factor = (text: string): number =>
-  text.endsWith("%") ? Number.parseFloat(text) / 100 : Number.parseFloat(text);
-
 function scaling(text: string): Matrix<3, "projective"> {
   if (text === "none") return space.identity;
-  const [x = 1, y = x, z = 1] = text.trim().split(/\s+/).map(factor);
+  const [x = 1, y = x, z = 1] = text.split(" ").map(Number);
   return space.scale(x, y, z);
 }
 
+function local(
+  style: CSSStyleDeclaration,
+  transform: string,
+): Matrix<2, "affine"> {
+  return space.flatten(
+    space.multiply(
+      rotation(style.rotate),
+      scaling(style.scale),
+      space.parse(transform),
+    ),
+  );
+}
+
 export function frame(node: Element): Matrix<2, "affine"> {
-  const own = getComputedStyle(node);
-  let chain = space.multiply(rotation(own.rotate), scaling(own.scale));
+  let chain = local(getComputedStyle(node), "none");
   for (
     let element = node.parentElement;
     element;
     element = element.parentElement
   ) {
     const style = getComputedStyle(element);
-    chain = space.multiply(
-      rotation(style.rotate),
-      scaling(style.scale),
-      space.parse(style.transform),
-      chain,
-    );
+    chain = plane.multiply(local(style, style.transform), chain);
   }
-  return plane.invert(plane.linear(space.flatten(chain))) ?? plane.identity;
+  return plane.invert(plane.linear(chain)) ?? plane.identity;
 }

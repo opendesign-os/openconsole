@@ -8,9 +8,9 @@ interface Session {
   readonly node: HTMLElement;
   readonly handler: Handler;
   readonly first: PointerEvent;
+  readonly controller: AbortController;
   last: PointerEvent;
   started: boolean;
-  select: string;
 }
 
 const handlers = new WeakMap<Element, Handler>();
@@ -26,23 +26,30 @@ function owner(event: PointerEvent): [HTMLElement, Handler] | undefined {
   return undefined;
 }
 
+function prevent(event: Event): void {
+  event.preventDefault();
+}
+
 function down(event: PointerEvent): void {
   if (session || !event.isPrimary || event.button !== 0) return;
   const found = owner(event);
   if (!found) return;
   const [node, handler] = found;
+  const controller = new AbortController();
   session = {
     node,
     handler,
     first: event,
+    controller,
     last: event,
     started: false,
-    select: "",
   };
+  const options = { capture: true, signal: controller.signal };
   const { ownerDocument } = node;
-  ownerDocument.addEventListener("pointermove", move, { capture: true });
-  ownerDocument.addEventListener("pointerup", up, { capture: true });
-  ownerDocument.addEventListener("pointercancel", up, { capture: true });
+  ownerDocument.addEventListener("pointermove", move, options);
+  ownerDocument.addEventListener("pointerup", up, options);
+  ownerDocument.addEventListener("pointercancel", up, options);
+  ownerDocument.addEventListener("dragstart", prevent, options);
 }
 
 function move(event: PointerEvent): void {
@@ -51,9 +58,12 @@ function move(event: PointerEvent): void {
   if (!session.started) {
     session.started = true;
     session.node.setPointerCapture(event.pointerId);
-    const root = session.node.ownerDocument.documentElement;
-    session.select = root.style.userSelect;
-    root.style.userSelect = "none";
+    const { ownerDocument } = session.node;
+    const clear = () => ownerDocument.getSelection()?.removeAllRanges();
+    clear();
+    ownerDocument.addEventListener("selectionchange", clear, {
+      signal: session.controller.signal,
+    });
     session.handler.start(session.first);
   }
   session.handler.move(event);
@@ -67,17 +77,13 @@ function up(event: PointerEvent): void {
 
 function stop(): void {
   if (!session) return;
-  const { node, handler, last, started, select } = session;
+  const { node, handler, controller, last, started } = session;
   session = undefined;
-  const { ownerDocument } = node;
-  ownerDocument.removeEventListener("pointermove", move, { capture: true });
-  ownerDocument.removeEventListener("pointerup", up, { capture: true });
-  ownerDocument.removeEventListener("pointercancel", up, { capture: true });
+  controller.abort();
   if (!started) return;
   if (node.hasPointerCapture(last.pointerId)) {
     node.releasePointerCapture(last.pointerId);
   }
-  ownerDocument.documentElement.style.userSelect = select;
   handler.end(last);
 }
 

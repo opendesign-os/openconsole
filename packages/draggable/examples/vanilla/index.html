@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原生 TypeScript · @openconsole/draggable</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./main.ts"></script>
+  </head>
+  <body>
+    <header class="controls">
+      <label><input id="snap" type="checkbox" checked /> 网格吸附</label>
+      <label><input id="lines" type="checkbox" checked /> 网格线</label>
+      <label>
+        网格(px)
+        <input
+          id="step"
+          type="range"
+          min="10"
+          max="40"
+          step="5"
+          value="20"
+        /><output></output>
+      </label>
+      <label>
+        缩放
+        <input
+          id="zoom"
+          type="range"
+          min="0.5"
+          max="2"
+          step="0.1"
+          value="1"
+        /><output></output>
+      </label>
+      <label>
+        旋转(°)
+        <input
+          id="turn"
+          type="range"
+          min="-45"
+          max="45"
+          step="5"
+          value="0"
+        /><output></output>
+      </label>
+      <button id="reset" type="button">复位</button>
+    </header>
+    <main class="stage">
+      <div id="board" class="board">
+        <div class="card"></div>
+        <div class="card"></div>
+        <div class="card"></div>
+      </div>
+    </main>
+  </body>
+</html>

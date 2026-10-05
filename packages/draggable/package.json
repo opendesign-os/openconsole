@@ -2,7 +2,7 @@
   "name": "@openconsole/draggable",
   "version": "0.0.1",
   "private": true,
-  "description": "指针拖拽：以三维矩阵为载体的插件、共享事件委托、基于 matrix 的精确跟手",
+  "description": "指针拖拽：开箱即用的网格、可扩展的插件、与 DOM 解耦的跟手逻辑、基于 matrix 的精确跟手",
   "license": "MIT",
   "keywords": [
     "drag",
@@ -24,8 +24,10 @@
     ".": "./index.ts"
   },
   "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc",
-    "check": "tsc"
+    "check": "tsc && vitest run"
   },
   "dependencies": {
     "@openconsole/matrix": "workspace:*"
