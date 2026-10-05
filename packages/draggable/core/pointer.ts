@@ -17,7 +17,7 @@ const handlers = new WeakMap<Element, Handler>();
 const documents = new WeakSet<Document>();
 let session: Session | undefined;
 
-function owner(event: PointerEvent): [HTMLElement, Handler] | undefined {
+function find(event: PointerEvent): [HTMLElement, Handler] | undefined {
   for (const target of event.composedPath()) {
     if (!(target instanceof HTMLElement)) continue;
     const handler = handlers.get(target);
@@ -32,7 +32,7 @@ function prevent(event: Event): void {
 
 function down(event: PointerEvent): void {
   if (session || !event.isPrimary || event.button !== 0) return;
-  const found = owner(event);
+  const found = find(event);
   if (!found) return;
   const [node, handler] = found;
   const controller = new AbortController();
