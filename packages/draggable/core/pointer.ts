@@ -95,7 +95,7 @@ export function bind(node: HTMLElement, handler: Handler): () => void {
     ownerDocument.addEventListener("pointerdown", down, { passive: true });
   }
   return () => {
-    handlers.delete(node);
-    if (session?.node === node) stop();
+    if (handlers.get(node) === handler) handlers.delete(node);
+    if (session?.handler === handler) stop();
   };
 }

@@ -30,7 +30,7 @@ const home = (index: number) =>
 
 const drags = [...board.querySelectorAll<HTMLElement>(".card")].map(
   (card, index) =>
-    new Draggable(card, { matrix: home(index), use: [label(card)] }),
+    new Draggable(card, board, { matrix: home(index) }).use(label(card)),
 );
 
 function apply(): void {

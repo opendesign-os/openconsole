@@ -5,32 +5,34 @@ import { plane, space } from "@openconsole/matrix";
 import { Tracker } from "../core/tracker";
 import { grid } from "../plugins/grid";
 
-function drag(tracker: Tracker, x: number, y: number): Tracker {
-  tracker.start({ x: 0, y: 0 });
-  tracker.move({ x, y });
-  tracker.end({ x, y });
-  return tracker;
-}
+const drag = (tracker: Tracker, x: number, y: number): Tracker =>
+  tracker.start({ x: 0, y: 0 }).move({ x, y }).end({ x, y });
 
 describe("grid", () => {
   it("snaps both axes to the step", () => {
-    const { matrix } = drag(new Tracker({ use: [grid(10)] }), 27, 34);
+    const { matrix } = drag(new Tracker({ plugins: [grid(10)] }), 27, 34);
     expect(space.round(matrix)).toEqual(space.translate(30, 30, 0));
   });
 
   it("snaps the translation itself rather than the movement", () => {
     const tracker = new Tracker({
       matrix: space.translate(3, 0, 0),
-      use: [grid(10)],
+      plugins: [grid(10)],
     });
     const { matrix } = drag(tracker, 1, 0);
     expect(space.round(matrix)).toEqual(space.identity);
   });
 
+  it("rejects a step that is not positive and finite", () => {
+    for (const step of [0, -10, Number.NaN, Infinity]) {
+      expect(() => grid(step)).toThrow(RangeError);
+    }
+  });
+
   it("keeps the linear part", () => {
     const origin = space.lift(plane.rotate(0.5));
     const { matrix } = drag(
-      new Tracker({ matrix: origin, use: [grid(10)] }),
+      new Tracker({ matrix: origin, plugins: [grid(10)] }),
       27,
       34,
     );

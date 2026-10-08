@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **开箱即用**:`grid` 选项把拖拽限定在容器内,`snap` 开关吸附,`lines` 开关网格线
+- **开箱即用**:拖拽限定在指定的容器内;`grid` 选项开启网格,`snap` 开关吸附,`lines` 开关网格线
 - **插件扩展**:一套钩子同时覆盖逻辑(改写矩阵)与界面(挂载、刷新、卸载)
 - **逻辑与 DOM 分离**:`Tracker` 只处理点与矩阵,可由指针、键盘、测试或回放驱动,也能用于 canvas;`Draggable` 在其上绑定元素
 - **精确跟手**:逐层合成祖先与元素自身的变换并求逆,旋转、斜切、缩放乃至多层 3D 旋转时元素仍贴着指针
@@ -27,12 +27,18 @@
 import { Draggable } from "@openconsole/draggable";
 import { space } from "@openconsole/matrix";
 
-const drag = new Draggable(card, { grid: 20 }); // 在容器里画 20px 网格,不超出容器,吸附到网格
+const drag = new Draggable(card, board, { grid: 20 }); // 限定在 board 内,画 20px 网格并吸附
 drag.update({ snap: false }); // 只关吸附
 drag.update({ lines: false }); // 只关网格线
-drag.update({ grid: 0 }); // 关闭网格
+drag.update({ grid: 0 }); // 关闭网格,仍限定在 board 内
 drag.update({ matrix: space.translate(120, 80, 0) }); // 直接改位置
 drag.destroy();
+```
+
+`Draggable` 与 `Tracker` 的方法(`[Symbol.dispose]()` 除外)都返回实例本身,可以链式调用:
+
+```ts
+drag.update({ snap: false }).update({ matrix: space.translate(120, 80, 0) });
 ```
 
 画布缩放、旋转时不需要额外处理:指针移动 (dx, dy),元素在屏幕上同样移动 (dx, dy)。
@@ -54,10 +60,12 @@ function label(card: HTMLElement): Plugin {
   return { onAttach: show, onMove: show, onUpdate: show };
 }
 
-new Draggable(card, { grid: 20, use: [save, label(card)] });
+new Draggable(card, board, { grid: 20, plugins: [save, label(card)] });
+new Draggable(card, board, { grid: 20 }).use(save).use(label(card)); // 等价
 ```
 
-- `onMove` 返回矩阵即替换候选变换,插件按 `use` 的顺序串联;`grid` 选项展开的内置插件排在 `use` 之前
+- `plugins` 选项与 `update({ plugins })` 整体替换插件;`use` 追加一个或一组插件,已挂上的不重复添加
+- `onMove` 返回矩阵即替换候选变换,插件按 `plugins` 的顺序串联,内置插件排在 `plugins` 之前
 - 钩子在渲染之前调用:界面插件读 `context.matrix`,不测量 DOM;需要的元素用闭包传入
 - `Plugin` 只读输入的 `x`、`y`;要读事件的其他字段时写 `Plugin<PointerEvent>`
 - `m41`、`m42`(下标 12、13)即 x、y 平移
@@ -71,7 +79,7 @@ new Draggable(card, { grid: 20, use: [save, label(card)] });
 import { grid, Tracker } from "@openconsole/draggable";
 import { plane } from "@openconsole/matrix";
 
-const tracker = new Tracker<PointerEvent>({ use: [grid(20)] });
+const tracker = new Tracker<PointerEvent>().use(grid(20));
 const frame = plane.invert(plane.linear(view)) ?? plane.identity; // view:场景到客户区的视图矩阵
 
 canvas.addEventListener("pointerdown", (event) => tracker.start(event, frame));
@@ -87,42 +95,45 @@ canvas.addEventListener("pointerup", (event) => tracker.end(event));
 
 ### `class Draggable`
 
-| 成员                            | 说明                                                           |
-| ------------------------------- | -------------------------------------------------------------- |
-| `new Draggable(node, options?)` | 绑定元素,`touch-action` 设为 `none`;传了 `matrix` 立即渲染     |
-| `node`                          | 绑定的元素                                                     |
-| `matrix`                        | 当前变换(只读)                                                 |
-| `dragging`                      | 是否正在拖拽                                                   |
-| `update(options)`               | 语义同 `Tracker.update`;`matrix` 生效后立即渲染                |
-| `destroy()`                     | 解绑、卸载插件并恢复原来的内联 `touch-action`;正在拖拽时先结束 |
-| `[Symbol.dispose]()`            | 同 `destroy()`,支持 `using`                                    |
+| 成员                                       | 说明                                                                    |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `new Draggable(node, container, options?)` | 绑定元素与容器,`touch-action` 设为 `none`;传了 `matrix` 立即渲染        |
+| `node`                                     | 绑定的元素                                                              |
+| `container`                                | 容器:`node` 的 `offsetParent`,拖拽限定在它的内边距盒内,网格线也画在这里 |
+| `matrix`                                   | 当前变换(只读)                                                          |
+| `dragging`                                 | 是否正在拖拽                                                            |
+| `use(plugins)`                             | 语义同 `Tracker.use`,追加在内置插件与已有插件之后                       |
+| `update(options)`                          | 语义同 `Tracker.update`;`matrix` 生效后立即渲染                         |
+| `destroy()`                                | 解绑、卸载插件并恢复原来的内联 `touch-action`;正在拖拽时先结束          |
+| `[Symbol.dispose]()`                       | 同 `destroy()`,支持 `using`                                             |
 
 `options` 为 `DraggableOptions`,在 `Options<PointerEvent>` 上增加:
 
-| 键      | 说明                                                                       |
-| ------- | -------------------------------------------------------------------------- |
-| `grid`  | 网格步长;大于 0 时把拖拽限定在 `offsetParent` 内,为 0 或不传时关闭整个网格 |
-| `snap`  | 是否吸附到网格,默认 `true`                                                 |
-| `lines` | 是否在 `offsetParent` 里画网格线,默认 `true`                               |
+| 键      | 说明                                         |
+| ------- | -------------------------------------------- |
+| `grid`  | 网格步长;大于 0 时开启网格,为 0 或不传时关闭 |
+| `snap`  | 是否吸附到网格,默认 `true`                   |
+| `lines` | 是否在 `container` 里画网格线,默认 `true`    |
 
-`snap`、`lines` 只在 `grid` 大于 0 时生效;`update` 时除 `matrix` 外传入任一项都会重新组合内置插件。
+`snap`、`lines` 只在 `grid` 大于 0 时生效;值为 `undefined` 等同于不传,取默认值;`update` 时除 `matrix` 外传入任一项都会重新组合内置插件。
 
 ### `class Tracker<E>`
 
 `E` 为输入类型,须满足 `Point<2>`,默认 `Point<2>`。
 
-| 成员                    | 说明                                                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `new Tracker(options?)` | 挂载 `use` 中的插件                                                                                                 |
-| `matrix`                | 当前变换(只读)                                                                                                      |
-| `dragging`              | 是否正在拖拽                                                                                                        |
-| `start(event, frame?)`  | 开始拖拽,`frame` 默认恒等                                                                                           |
-| `move(event)`           | 经 `frame` 换算相对起点的位移,左乘到起拖矩阵上,再依次交给插件                                                       |
-| `end(event)`            | 结束拖拽                                                                                                            |
-| `update(options)`       | 只写传入的键:`use` 不拖拽时立即替换,拖拽中在结束后替换;`matrix` 不拖拽时生效并通知插件;同时传入时先替换插件再改矩阵 |
-| `destroy()`             | 卸载全部插件;正在拖拽时直接丢弃,不调用 `onEnd`                                                                      |
+| 成员                    | 说明                                                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `new Tracker(options?)` | 挂载 `plugins` 中的插件                                                                                                 |
+| `matrix`                | 当前变换(只读)                                                                                                          |
+| `dragging`              | 是否正在拖拽                                                                                                            |
+| `use(plugins)`          | 追加一个插件或一组插件,已挂上的跳过;时机同 `update({ plugins })`,拖拽中追加到待替换的列表                               |
+| `start(event, frame?)`  | 开始拖拽,`frame` 默认恒等                                                                                               |
+| `move(event)`           | 经 `frame` 换算相对起点的位移,左乘到起拖矩阵上,再依次交给插件                                                           |
+| `end(event)`            | 结束拖拽                                                                                                                |
+| `update(options)`       | 只写传入的键:`plugins` 不拖拽时立即替换,拖拽中在结束后替换;`matrix` 不拖拽时生效并通知插件;同时传入时先替换插件再改矩阵 |
+| `destroy()`             | 卸载全部插件;正在拖拽时直接丢弃,不调用 `onEnd`                                                                          |
 
-`Options<E>`:`matrix` 为初始变换,`Tracker` 默认 `space.identity`,`Draggable` 默认取元素当前的 `transform`;`use` 为插件数组。
+`Options<E>`:`matrix` 为初始变换,`Tracker` 默认 `space.identity`,`Draggable` 默认取元素当前的 `transform`(元素未挂到文档时为 `space.identity`);`plugins` 为插件数组。
 
 ### `interface Plugin<E>`
 
@@ -150,14 +161,15 @@ canvas.addEventListener("pointerup", (event) => tracker.end(event));
 
 | 插件                         | 说明                                                                                                         |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `grid(step)`                 | 把平移 `m41`、`m42` 对齐到 `step` 的整数倍                                                                   |
+| `grid(step)`                 | 把平移 `m41`、`m42` 对齐到 `step` 的整数倍;`step` 须为正的有限数,否则抛 `RangeError`                         |
 | `bounds(measure)`            | 把平移限定在 `measure()` 返回的 `Bounds { left, top, right, bottom }` 内,每次开始拖拽时测量;放在 `grid` 之后 |
 | `gridlines(container, step)` | 挂载时在定位元素 `container` 里铺一层网格线,颜色取 `currentColor`;同一容器、同一步长只画一层                 |
 
-`grid` 选项按 `grid`(`snap` 为真时)、`bounds`、`gridlines`(`lines` 为真时)的顺序挂上内置插件,范围按 `offsetParent` 测量。
+`Draggable` 按 `grid`(网格开启且 `snap` 为真)、`bounds`、`gridlines`(网格开启且 `lines` 为真)的顺序挂上内置插件,`bounds` 始终挂上,范围按 `container` 测量。
 
 ## 行为说明
 
+- **容器**:`container` 须是 `node` 的 `offsetParent`,即定位元素且与 `node` 之间没有其他定位元素;范围按布局位置测量,不受变换影响
 - **起拖时机**:按下后第一次移动即开始,位移从按下点算起;只响应主指针的主键,同一时间只有一个拖拽
 - **嵌套**:沿 `composedPath()` 找最近的已绑定元素,内层优先
 - **文字选中与原生拖放**:起拖时清除选区,拖拽中选区一变化就再清除;按下期间阻止 `dragstart`
@@ -184,7 +196,7 @@ canvas.addEventListener("pointerup", (event) => tracker.end(event));
 index.ts         - 导出 Draggable、Tracker、内置插件与类型
 core/
 ├── tracker.ts   - Tracker:点 → 矩阵与插件调度
-├── draggable.ts - Draggable:绑定元素,展开 grid 选项
+├── draggable.ts - Draggable:绑定元素与容器,组合内置插件
 ├── pointer.ts   - 指针委托与会话(内部)
 └── frame.ts     - 祖先与元素自身的变换 → 逆线性映射(内部)
 plugins/

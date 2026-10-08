@@ -13,18 +13,21 @@ const line =
 export function gridlines(container: HTMLElement, step: number): Plugin {
   return {
     onAttach: () => {
-      let shared = layers.get(container);
-      if (!shared) {
-        shared = new Map();
-        layers.set(container, shared);
-      }
+      const shared = layers.get(container) ?? new Map<number, Layer>();
+      layers.set(container, shared);
       const layer = shared.get(step);
       if (layer) {
         layer.hosts += 1;
         return;
       }
       const element = container.ownerDocument.createElement("div");
-      element.style.cssText = `position:absolute;inset:0;pointer-events:none;background:linear-gradient(to right,${line}),linear-gradient(to bottom,${line});background-size:${step}px ${step}px`;
+      Object.assign(element.style, {
+        position: "absolute",
+        inset: "0",
+        pointerEvents: "none",
+        backgroundImage: `linear-gradient(to right, ${line}), linear-gradient(to bottom, ${line})`,
+        backgroundSize: `${step}px ${step}px`,
+      });
       container.prepend(element);
       shared.set(step, { element, hosts: 1 });
     },

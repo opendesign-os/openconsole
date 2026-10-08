@@ -61,7 +61,7 @@ describe("Tracker", () => {
         seen.push(matrix[12]);
       },
     };
-    const tracker = new Tracker({ use: [grid(20), spy] });
+    const tracker = new Tracker({ plugins: [grid(20), spy] });
     tracker.start({ x: 0, y: 0 });
     tracker.move({ x: 27, y: 4 });
     expect(seen).toEqual([20]);
@@ -76,7 +76,7 @@ describe("Tracker", () => {
     const origin = space.translate(1, 2, 0);
     const tracker = new Tracker({
       matrix: origin,
-      use: [{ onStart: push, onMove: push, onEnd: push }],
+      plugins: [{ onStart: push, onMove: push, onEnd: push }],
     });
     const frame = plane.scale(2);
     const down = { x: 0, y: 0 };
@@ -114,7 +114,7 @@ describe("Tracker", () => {
             )
           : undefined,
     };
-    const tracker = new Tracker<Input>({ use: [horizontal] });
+    const tracker = new Tracker<Input>({ plugins: [horizontal] });
     tracker.start({ x: 0, y: 0, shift: false });
     tracker.move({ x: 15, y: 40, shift: true });
     expect(space.round(tracker.matrix)).toEqual(space.translate(15, 0, 0));
@@ -126,7 +126,7 @@ describe("Tracker", () => {
     const calls: string[] = [];
     const tracker = new Tracker({
       matrix: space.translate(7, 0, 0),
-      use: [
+      plugins: [
         {
           onAttach: ({ matrix }) => {
             calls.push(`attach ${matrix[12]}`);
@@ -153,8 +153,8 @@ describe("Tracker", () => {
       },
     });
     const shared = named("shared");
-    const tracker = new Tracker({ use: [shared, named("old")] });
-    tracker.update({ use: [shared, named("new")] });
+    const tracker = new Tracker({ plugins: [shared, named("old")] });
+    tracker.update({ plugins: [shared, named("new")] });
     expect(calls).toEqual([
       "attach shared",
       "attach old",
@@ -181,9 +181,9 @@ describe("Tracker", () => {
         calls.push(`next attach ${matrix[12]}`);
       },
     };
-    const tracker = new Tracker({ use: [old] });
+    const tracker = new Tracker({ plugins: [old] });
     tracker.start({ x: 0, y: 0 });
-    tracker.update({ use: [next] });
+    tracker.update({ plugins: [next] });
     tracker.move({ x: 5, y: 0 });
     tracker.end({ x: 5, y: 0 });
     expect(calls).toEqual([
@@ -194,10 +194,60 @@ describe("Tracker", () => {
     ]);
   });
 
+  it("appends plugins with `use`, one or many at a time, each only once", () => {
+    const calls: string[] = [];
+    const named = (name: string): Plugin => ({
+      onAttach: () => {
+        calls.push(`attach ${name}`);
+      },
+      onMove: () => {
+        calls.push(`move ${name}`);
+      },
+    });
+    const first = named("first");
+    new Tracker()
+      .use(first)
+      .use([named("second"), first, named("third")])
+      .start({ x: 0, y: 0 })
+      .move({ x: 1, y: 0 });
+    expect(calls).toEqual([
+      "attach first",
+      "attach second",
+      "attach third",
+      "move first",
+      "move second",
+      "move third",
+    ]);
+  });
+
+  it("appends to a pending swap when `use` is called during a drag", () => {
+    const calls: string[] = [];
+    const named = (name: string): Plugin => ({
+      onAttach: () => {
+        calls.push(`attach ${name}`);
+      },
+      onDetach: () => {
+        calls.push(`detach ${name}`);
+      },
+    });
+    const tracker = new Tracker({ plugins: [named("old")] })
+      .start({ x: 0, y: 0 })
+      .update({ plugins: [named("next")] })
+      .use(named("extra"));
+    expect(calls).toEqual(["attach old"]);
+    tracker.end({ x: 0, y: 0 });
+    expect(calls).toEqual([
+      "attach old",
+      "detach old",
+      "attach next",
+      "attach extra",
+    ]);
+  });
+
   it("drops an active drag on destroy without ending it", () => {
     const calls: string[] = [];
     const tracker = new Tracker({
-      use: [
+      plugins: [
         {
           onEnd: () => {
             calls.push("end");
@@ -217,7 +267,7 @@ describe("Tracker", () => {
   it("ignores `matrix` while dragging and applies it with a notice when idle", () => {
     const updates: number[] = [];
     const tracker = new Tracker({
-      use: [
+      plugins: [
         {
           onUpdate: ({ matrix }) => {
             updates.push(matrix[12]);
@@ -254,8 +304,8 @@ describe("Tracker", () => {
         calls.push(`next update ${matrix[12]}`);
       },
     };
-    const tracker = new Tracker({ use: [old] });
-    tracker.update({ matrix: space.translate(8, 0, 0), use: [next] });
+    const tracker = new Tracker({ plugins: [old] });
+    tracker.update({ matrix: space.translate(8, 0, 0), plugins: [next] });
     expect(calls).toEqual(["old detach", "next attach 0", "next update 8"]);
   });
 

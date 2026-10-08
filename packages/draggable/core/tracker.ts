@@ -18,7 +18,7 @@ export interface Plugin<E extends Point<2> = Point<2>> {
 
 export interface Options<E extends Point<2> = Point<2>> {
   matrix?: Matrix<3, "projective">;
-  use?: readonly Plugin<E>[];
+  plugins?: readonly Plugin<E>[];
 }
 
 interface Session {
@@ -35,7 +35,7 @@ export class Tracker<E extends Point<2> = Point<2>> {
 
   constructor(options: Options<E> = {}) {
     this.#matrix = options.matrix ?? space.identity;
-    this.#use(options.use ?? []);
+    this.#swap(options.plugins ?? []);
   }
 
   get matrix(): Matrix<3, "projective"> {
@@ -46,27 +46,35 @@ export class Tracker<E extends Point<2> = Point<2>> {
     return this.#session !== undefined;
   }
 
-  update(options: Options<E>): void {
-    if (options.use) {
-      if (this.#session) this.#pending = options.use;
-      else this.#use(options.use);
-    }
-    if (!options.matrix || this.#session) return;
-    this.#matrix = options.matrix;
-    const context = { matrix: options.matrix };
-    for (const plugin of this.#plugins) plugin.onUpdate?.(context);
+  use(plugins: Plugin<E> | readonly Plugin<E>[]): this {
+    const current = this.#pending ?? this.#plugins;
+    return this.update({ plugins: [...new Set(current.concat(plugins))] });
   }
 
-  start(event: E, frame: Matrix<2, "affine"> = plane.identity): void {
-    if (this.#session) return;
+  update(options: Options<E>): this {
+    const { matrix, plugins } = options;
+    if (plugins) {
+      if (this.#session) this.#pending = plugins;
+      else this.#swap(plugins);
+    }
+    if (matrix && !this.#session) {
+      this.#matrix = matrix;
+      for (const plugin of this.#plugins) plugin.onUpdate?.({ matrix });
+    }
+    return this;
+  }
+
+  start(event: E, frame: Matrix<2, "affine"> = plane.identity): this {
+    if (this.#session) return this;
     const origin = this.#matrix;
     this.#session = { origin, frame, anchor: { x: event.x, y: event.y } };
     const context = { matrix: origin, origin, frame, event };
     for (const plugin of this.#plugins) plugin.onStart?.(context);
+    return this;
   }
 
-  move(event: E): void {
-    if (!this.#session) return;
+  move(event: E): this {
+    if (!this.#session) return this;
     const { origin, frame, anchor } = this.#session;
     const delta = plane.apply(frame, {
       x: event.x - anchor.x,
@@ -78,26 +86,28 @@ export class Tracker<E extends Point<2> = Point<2>> {
       if (next) matrix = next;
     }
     this.#matrix = matrix;
+    return this;
   }
 
-  end(event: E): void {
-    if (!this.#session) return;
+  end(event: E): this {
+    if (!this.#session) return this;
     const { origin, frame } = this.#session;
     this.#session = undefined;
     const context = { matrix: this.#matrix, origin, frame, event };
     for (const plugin of this.#plugins) plugin.onEnd?.(context);
-    if (!this.#pending) return;
-    this.#use(this.#pending);
+    if (this.#pending) this.#swap(this.#pending);
     this.#pending = undefined;
+    return this;
   }
 
-  destroy(): void {
+  destroy(): this {
     this.#session = undefined;
     this.#pending = undefined;
-    this.#use([]);
+    this.#swap([]);
+    return this;
   }
 
-  #use(plugins: readonly Plugin<E>[]): void {
+  #swap(plugins: readonly Plugin<E>[]): void {
     const previous = this.#plugins;
     this.#plugins = plugins;
     for (const plugin of previous) {

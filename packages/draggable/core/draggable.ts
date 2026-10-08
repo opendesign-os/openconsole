@@ -13,28 +13,27 @@ export interface DraggableOptions extends Options<PointerEvent> {
   lines?: boolean;
 }
 
-interface Settings {
-  readonly grid: number;
-  readonly snap: boolean;
-  readonly lines: boolean;
-  readonly use: readonly Plugin<PointerEvent>[];
-}
-
 export class Draggable {
   readonly node: HTMLElement;
+  readonly container: HTMLElement;
   readonly #tracker: Tracker<PointerEvent>;
-  #settings: Settings;
+  #settings: Omit<DraggableOptions, "matrix">;
   #hint = "";
   readonly #touch: string;
   readonly #release: () => void;
 
-  constructor(node: HTMLElement, options: DraggableOptions = {}) {
+  constructor(
+    node: HTMLElement,
+    container: HTMLElement,
+    options: DraggableOptions = {},
+  ) {
     const { matrix, ...settings } = options;
     this.node = node;
-    this.#settings = { grid: 0, snap: true, lines: true, use: [], ...settings };
+    this.container = container;
+    this.#settings = settings;
     this.#tracker = new Tracker({
-      matrix: matrix ?? space.parse(getComputedStyle(node).transform),
-      use: this.#plugins(),
+      matrix: matrix ?? space.parse(getComputedStyle(node).transform || "none"),
+      plugins: this.#plugins(),
     });
     this.#touch = node.style.touchAction;
     node.style.touchAction = "none";
@@ -54,21 +53,29 @@ export class Draggable {
     return this.#tracker.dragging;
   }
 
-  update(options: DraggableOptions): void {
+  use(plugins: Plugin<PointerEvent> | readonly Plugin<PointerEvent>[]): this {
+    const { plugins: current = [] } = this.#settings;
+    return this.update({ plugins: [...new Set(current.concat(plugins))] });
+  }
+
+  update(options: DraggableOptions): this {
     const { matrix, ...settings } = options;
     if (Object.keys(settings).length > 0) {
       this.#settings = { ...this.#settings, ...settings };
-      this.#tracker.update({ use: this.#plugins() });
+      this.#tracker.update({ plugins: this.#plugins() });
     }
-    if (!matrix) return;
-    this.#tracker.update({ matrix });
-    this.#render();
+    if (matrix) {
+      this.#tracker.update({ matrix });
+      this.#render();
+    }
+    return this;
   }
 
-  destroy(): void {
+  destroy(): this {
     this.#release();
     this.#tracker.destroy();
     this.node.style.touchAction = this.#touch;
+    return this;
   }
 
   [Symbol.dispose](): void {
@@ -96,10 +103,13 @@ export class Draggable {
   }
 
   #plugins(): readonly Plugin<PointerEvent>[] {
-    const { grid: step, snap, lines, use } = this.#settings;
-    const node = this.node;
-    const container = step > 0 ? node.offsetParent : null;
-    if (!(container instanceof HTMLElement)) return use;
+    const {
+      grid: step = 0,
+      snap = true,
+      lines = true,
+      plugins = [],
+    } = this.#settings;
+    const { node, container } = this;
     const inside = bounds(() => ({
       left: -node.offsetLeft,
       top: -node.offsetTop,
@@ -107,10 +117,10 @@ export class Draggable {
       bottom: container.clientHeight - node.offsetHeight - node.offsetTop,
     }));
     return [
-      ...(snap ? [grid(step)] : []),
+      ...(step > 0 && snap ? [grid(step)] : []),
       inside,
-      ...(lines ? [gridlines(container, step)] : []),
-      ...use,
+      ...(step > 0 && lines ? [gridlines(container, step)] : []),
+      ...plugins,
     ];
   }
 }
