@@ -1,4 +1,4 @@
-import { Draggable, type Context, type Plugin } from "@openconsole/draggable";
+import { Draggable, type Context, type Plugin } from "@openconsole/interaction";
 import { space } from "@openconsole/matrix";
 
 function find<T extends Element>(

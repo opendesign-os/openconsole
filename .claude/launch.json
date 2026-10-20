@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "draggable-examples",
+      "name": "interaction-examples",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@openconsole/draggable-examples", "dev"],
+      "runtimeArgs": ["--filter", "@openconsole/interaction-examples", "dev"],
       "port": 5173
     }
   ]

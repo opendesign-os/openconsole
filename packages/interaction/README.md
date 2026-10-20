@@ -1,6 +1,6 @@
-# @openconsole/draggable
+# @openconsole/interaction
 
-指针拖拽:开箱即用的网格、可扩展的插件、不依赖 DOM 的跟手逻辑,借助 `@openconsole/matrix` 在带变换的容器里精确跟手。
+指针交互:拖拽、放置、调整尺寸、排序、旋转、平移缩放与协作。目前提供拖拽:开箱即用的网格、可扩展的插件、不依赖 DOM 的跟手逻辑,借助 `@openconsole/matrix` 在带变换的容器里精确跟手。
 
 ## 特性
 
@@ -16,7 +16,7 @@
 ```json
 {
   "dependencies": {
-    "@openconsole/draggable": "workspace:*"
+    "@openconsole/interaction": "workspace:*"
   }
 }
 ```
@@ -24,7 +24,7 @@
 ## 使用
 
 ```ts
-import { Draggable } from "@openconsole/draggable";
+import { Draggable } from "@openconsole/interaction";
 import { space } from "@openconsole/matrix";
 
 const drag = new Draggable(card, board, { grid: 20 }); // 限定在 board 内,画 20px 网格并吸附
@@ -46,7 +46,7 @@ drag.update({ snap: false }).update({ matrix: space.translate(120, 80, 0) });
 ### 插件
 
 ```ts
-import { Draggable, type Context, type Plugin } from "@openconsole/draggable";
+import { Draggable, type Context, type Plugin } from "@openconsole/interaction";
 import { space } from "@openconsole/matrix";
 
 const save: Plugin = {
@@ -76,7 +76,7 @@ new Draggable(card, board, { grid: 20 }).use(save).use(label(card)); // 等价
 `PointerEvent` 的 `x`、`y` 就是 `clientX`、`clientY`,可以直接传入;测试或回放传 `{ x, y }` 即可:
 
 ```ts
-import { grid, Tracker } from "@openconsole/draggable";
+import { grid, Tracker } from "@openconsole/interaction";
 import { plane } from "@openconsole/matrix";
 
 const tracker = new Tracker<PointerEvent>().use(grid(20));
@@ -209,9 +209,9 @@ examples/        - 示例(独立的 workspace 包),按框架分目录
 ## 开发
 
 ```bash
-pnpm --filter @openconsole/draggable check         # tsc + vitest run
-pnpm --filter @openconsole/draggable test
-pnpm --filter @openconsole/draggable-examples dev  # 示例,http://localhost:5173
+pnpm --filter @openconsole/interaction check         # tsc + vitest run
+pnpm --filter @openconsole/interaction test
+pnpm --filter @openconsole/interaction-examples dev  # 示例,http://localhost:5173
 ```
 
 示例由 Vite 开发服务器按需转译包里的 TypeScript 源码。新增框架时在 `examples/` 下建同名目录,并在 `examples/index.html` 加上链接。
