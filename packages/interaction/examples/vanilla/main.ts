@@ -1,14 +1,14 @@
-import { Draggable, type Context, type Plugin } from "@openconsole/interaction";
-import { space } from "@openconsole/matrix";
+import {
+  Draggable,
+  Resizable,
+  Rotatable,
+  type Handle,
+  type Plugin,
+  type State,
+} from "@openconsole/interaction";
+import { plane } from "@openconsole/matrix";
 
-function find<T extends Element>(
-  selector: string,
-  type: { new (): T; prototype: T },
-): T {
-  const element = document.querySelector(selector);
-  if (element instanceof type) return element;
-  throw new Error(`missing ${selector}`);
-}
+import { find } from "./find";
 
 const board = find("#board", HTMLElement);
 const snap = find("#snap", HTMLInputElement);
@@ -18,19 +18,68 @@ const zoom = find("#zoom", HTMLInputElement);
 const turn = find("#turn", HTMLInputElement);
 const reset = find("#reset", HTMLButtonElement);
 
+const sides: readonly Handle["x"][] = [-1, 0, 1];
+const handles: readonly Handle[] = sides
+  .flatMap((x) => sides.map((y) => ({ x, y })))
+  .filter(({ x, y }) => x !== 0 || y !== 0);
+
+const cursors = new Map([
+  ["0", "ew-resize"],
+  ["1", "nwse-resize"],
+  ["-1", "nesw-resize"],
+]);
+
+function edges(card: HTMLElement): Map<Element, Handle> {
+  return new Map(
+    handles.map((handle): [Element, Handle] => {
+      const edge = document.createElement("i");
+      edge.className = "edge";
+      edge.style.left = `${((handle.x + 1) / 2) * 100}%`;
+      edge.style.top = `${((handle.y + 1) / 2) * 100}%`;
+      edge.style.cursor =
+        handle.x === 0
+          ? "ns-resize"
+          : (cursors.get(`${handle.x * handle.y}`) ?? "move");
+      card.append(edge);
+      return [edge, handle];
+    }),
+  );
+}
+
 function label(card: HTMLElement): Plugin {
-  const show = ({ matrix }: Pick<Context, "matrix">) => {
-    card.textContent = `${Math.round(matrix[12])}, ${Math.round(matrix[13])}`;
+  const text = card.querySelector(".label") ?? card;
+  const show = ({ state }: { readonly state: State }) => {
+    const [a, b, , , e, f] = state.matrix;
+    const degrees = Math.round((Math.atan2(b, a) * 180) / Math.PI);
+    text.textContent = `${Math.round(e)}, ${Math.round(f)} · ${degrees}°`;
   };
-  return { onAttach: show, onMove: show, onUpdate: show };
+  return { onAttach: show, onChange: show };
 }
 
 const home = (index: number) =>
-  space.translate(40 + index * 160, 40 + index * 80, 0);
+  plane.translate(40 + index * 160, 40 + index * 80);
+const size = { width: 120, height: 80 };
 
-const drags = [...board.querySelectorAll<HTMLElement>(".card")].map(
-  (card, index) =>
-    new Draggable(card, board, { matrix: home(index) }).use(label(card)),
+const cards = [...board.querySelectorAll<HTMLElement>(".card")].map(
+  (card, index) => {
+    const grip = document.createElement("i");
+    grip.className = "grip";
+    card.append(grip);
+    return {
+      drag: new Draggable(card, {
+        container: board,
+        matrix: home(index),
+        plugins: [label(card)],
+      }),
+      rotate: new Rotatable(card, { handle: grip, step: Math.PI / 12 }),
+      resize: new Resizable(card, {
+        handles: edges(card),
+        container: board,
+        width: { min: 60 },
+        height: { min: 40 },
+      }),
+    };
+  },
 );
 
 function apply(): void {
@@ -45,13 +94,16 @@ function apply(): void {
     snap: snap.checked,
     lines: lines.checked,
   };
-  for (const drag of drags) drag.update(options);
+  for (const { drag } of cards) drag.update(options);
 }
 
 for (const input of [snap, lines, step, zoom, turn]) {
   input.addEventListener("input", apply);
 }
 reset.addEventListener("click", () => {
-  drags.forEach((drag, index) => drag.update({ matrix: home(index) }));
+  cards.forEach(({ drag, resize }, index) => {
+    resize.update({ size });
+    drag.update({ matrix: home(index) });
+  });
 });
 apply();

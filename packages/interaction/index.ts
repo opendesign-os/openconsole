@@ -1,10 +1,36 @@
-export { Draggable, type DraggableOptions } from "./core/draggable";
+export * from "./capabilities";
 export {
+  center,
+  corners,
+  extent,
+  resize,
   Tracker,
+  transform,
+  type Action,
+  type Bounds,
   type Context,
-  type Options,
+  type Edges,
+  type Freedom,
+  type Handle,
+  type Input,
+  type Modifiers,
+  type Patch,
   type Plugin,
-} from "./core/tracker";
-export { bounds, type Bounds } from "./plugins/bounds";
-export { grid } from "./plugins/grid";
-export { gridlines } from "./plugins/gridlines";
+  type Size,
+  type State,
+  type Step,
+  type TrackerOptions,
+} from "./core";
+export {
+  bind,
+  observe,
+  type Activation,
+  type Binding,
+  type BindOptions,
+  type Key,
+  type Keys,
+  type Observer,
+  type Render,
+  type Session,
+} from "./dom";
+export * from "./plugins";

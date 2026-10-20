@@ -1,4 +1,4 @@
-import type { Plugin } from "../core/tracker";
+import type { Plugin } from "../core";
 
 interface Layer {
   readonly element: HTMLElement;
