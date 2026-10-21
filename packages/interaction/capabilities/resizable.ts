@@ -1,6 +1,6 @@
-import { resize, type Handle, type State } from "../core";
+import { resize, type Handle, type Range, type State } from "../core";
 import { bind, range, type Binding, type BindOptions } from "../dom";
-import { bounds, limits, type Range } from "../plugins";
+import { bounds, limits } from "../plugins";
 
 export interface ResizableOptions extends Omit<
   BindOptions,

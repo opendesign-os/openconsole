@@ -1,9 +1,11 @@
 export * from "./capabilities";
 export {
   center,
+  closest,
   corners,
   extent,
   resize,
+  Store,
   Tracker,
   transform,
   type Action,
@@ -16,13 +18,16 @@ export {
   type Modifiers,
   type Patch,
   type Plugin,
+  type Range,
   type Size,
+  type Slot,
   type State,
   type Step,
   type TrackerOptions,
 } from "./core";
 export {
   bind,
+  gridlines,
   observe,
   type Activation,
   type Binding,

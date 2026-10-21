@@ -1,7 +1,7 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import { local, type Bounds, type Computed, type Size } from "../core";
-import type { Range } from "../plugins";
+import type { Bounds, Range, Size } from "../core";
+import { local, type Computed } from "./style";
 
 type Axis = "width" | "height";
 

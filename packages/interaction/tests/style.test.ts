@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { plane, space } from "@openconsole/matrix";
 
-import { fold, local, rotation } from "../core";
+import { fold, local, rotation } from "../dom";
 
 const size = { width: 100, height: 50 };
 

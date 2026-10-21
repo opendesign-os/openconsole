@@ -10,7 +10,7 @@
 - **精确跟手**:祖先带旋转、斜切、非等比缩放时,拖拽、旋转、双指与调整尺寸仍贴着指针
 - **可扩展**:动作(`Action`)、插件(`Plugin`)、旁观者(`observe`)与渲染(`render`)都可替换
 - **无障碍**:键盘抓取与移动、Esc 取消,排序提供非拖拽的 `move()`
-- **逻辑与 DOM 分离**:`core/` 不依赖 DOM,在 Node 中测试;导入时不访问 DOM
+- **逻辑与 DOM 分离**:`core/` 与 `plugins/` 不引用任何 DOM API 或类型,在 Node 中测试;读写 DOM 只在 `dom/`,`capabilities/` 负责组装;导入时不访问 DOM
 - 唯一依赖 `@openconsole/matrix`
 
 ## 在本仓库中使用
@@ -163,7 +163,7 @@ interface Plugin {
 | `bounds(measure)`                  | 包围盒须待在 `measure()` 返回的区域内:能平移就推回,调整尺寸就夹边,否则退回上一步 |
 | `limits({ width, height, scale })` | 夹住移动边的尺寸;能缩放时绕 `anchor` 夹住缩放                                    |
 | `angle(step)`                      | 能旋转时把角度吸附到步长(弧度),绕 `anchor`                                       |
-| `gridlines(container, step)`       | 在容器里铺一层网格线;同一容器、同一步长只画一层                                  |
+| `gridlines(container, step)`       | 在容器里铺一层网格线;同一容器、同一步长只画一层(位于 `dom/`,会创建元素)          |
 
 能力组合内置插件的顺序固定为 `grid → 用户插件 → bounds → limits`,用户插件不会把元素推出范围。
 
@@ -209,7 +209,7 @@ const stop = observe({ onMove: ({ node, state, input, data }) => {} }); // 旁�
 interface Input {
   readonly points: readonly Point<2>[]; // 屏幕坐标
   readonly modifiers?: Modifiers;
-  readonly event?: Event;
+  readonly event?: unknown; // 原生事件,按需自行收窄
   readonly timestamp?: number;
 }
 interface Step {
@@ -239,6 +239,9 @@ canvas.addEventListener("pointermove", (event) => {
 });
 canvas.addEventListener("pointerup", () => tracker.end());
 ```
+
+多个 `Tracker` 共享同一份状态时用 `Store`:`join` 登记、`lock` 保证同一时间只有一个会话、`commit` 写入并同步给其他 `Tracker`。
+DOM 层的 Model 就是在 `Store` 之上加了折叠、测量与渲染。
 
 ## API
 
@@ -298,28 +301,30 @@ canvas.addEventListener("pointerup", () => tracker.end());
 
 ```
 index.ts            - 公开 API:core、dom 显式列出,capabilities、plugins 整体转发
-core/               - 不依赖 DOM
-├── index.ts        - 汇总本目录全部导出,供包内其他目录引用
-├── state.ts        - State、Patch、Bounds、merge、corners、extent、center
+core/               - 逻辑:不引用 DOM
 ├── action.ts       - Action、Freedom、transform、resize
+├── frame.ts        - 屏幕 ↔ 容器空间
+├── order.ts        - 排序:closest 选位置,arrange 给出移动计划
+├── state.ts        - State、Patch、Range、Bounds、merge、corners、extent、center
+├── store.ts        - Store:共享状态、会话锁、多个 Tracker 之间同步
 ├── tracker.ts      - Tracker:候选 → 插件 → 提交
-├── style.ts        - 计算样式 → 矩阵(fold,内部)
-└── frame.ts        - 屏幕 ↔ 容器空间(内部)
-dom/
-├── index.ts        - 汇总本目录全部导出,供包内其他目录引用
+└── zone.ts         - 放置:按内外层与分数选出目标
+plugins/            - 约束:grid、bounds、limits、angle(不引用 DOM)
+dom/                - 适配:只有这里读写 DOM
 ├── bind.ts         - bind、observe、Binding
-├── model.ts        - 每个节点一份状态:折叠、渲染、会话锁、同步(内部)
-├── router.ts       - 指针路由、句柄与排除区(内部)
-├── keyboard.ts     - 键盘(内部)
-├── wheel.ts        - 滚轮(内部)
-└── measure.ts      - DOM 测量(内部)
-capabilities/       - index.ts 汇总:draggable、rotatable、resizable、zoomable、droppable、sortable
-plugins/            - index.ts 汇总:grid、bounds、limits、angle、gridlines
+├── gridlines.ts    - 网格线插件
+├── keyboard.ts     - 键盘
+├── measure.ts      - 测量
+├── model.ts        - 在 Store 之上折叠、测量、渲染
+├── router.ts       - 指针路由、句柄与排除区
+├── style.ts        - 计算样式 → 矩阵(fold)
+└── wheel.ts        - 滚轮
+capabilities/       - 组装:draggable、rotatable、resizable、zoomable、droppable、sortable
 examples/           - 示例(独立的 workspace 包),按框架分目录
 ```
 
 子目录各自由 `index.ts` 集中导出;跨目录一律从子目录的 `index.ts` 导入,同一目录内直接引用文件。
-根 `index.ts` 决定公开范围:内部模块(样式折叠、frame、模型、路由、键盘、滚轮、测量)不对外导出。
+根 `index.ts` 决定公开范围:内部函数(移动计划、目标选择、样式折叠、frame、模型、路由、键盘、滚轮、测量)不对外导出。
 
 ## 开发
 

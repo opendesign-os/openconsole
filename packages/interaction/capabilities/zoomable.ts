@@ -1,8 +1,8 @@
 import { plane } from "@openconsole/matrix";
 
-import { transform, type State, type Step } from "../core";
+import { transform, type Range, type State, type Step } from "../core";
 import { bind, wheel, type Binding, type BindOptions, type Keys } from "../dom";
-import { limits, type Range } from "../plugins";
+import { limits } from "../plugins";
 
 export interface ZoomableOptions extends Omit<
   BindOptions,

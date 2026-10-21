@@ -1,11 +1,6 @@
 import { plane } from "@openconsole/matrix";
 
-import { resizes, type Plugin } from "../core";
-
-export interface Range {
-  readonly min?: number;
-  readonly max?: number;
-}
+import { resizes, type Plugin, type Range } from "../core";
 
 export interface Limits {
   readonly width?: Range;

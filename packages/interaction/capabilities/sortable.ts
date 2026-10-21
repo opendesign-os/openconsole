@@ -1,10 +1,12 @@
-import { plane, type Point } from "@openconsole/matrix";
+import { plane } from "@openconsole/matrix";
 
 import {
+  arrange,
   center,
+  closest,
   transform,
-  type Bounds,
   type Plugin,
+  type Slot,
   type State,
   type Step,
 } from "../core";
@@ -29,8 +31,6 @@ export interface Sort {
   readonly to: Place;
 }
 
-export type Slot = (point: Point<2>, boxes: readonly Bounds[]) => number;
-
 export interface SortableOptions extends Omit<
   BindOptions,
   "action" | "handle" | "ignore" | "keys" | "matrix" | "size" | "index"
@@ -42,22 +42,6 @@ export interface SortableOptions extends Omit<
   readonly duration?: number;
   readonly onSort?: (sort: Sort) => void;
 }
-
-export const closest: Slot = (point, boxes) => {
-  let index = -1;
-  let nearest = Infinity;
-  boxes.forEach((bounds, position) => {
-    const distance = Math.hypot(
-      (bounds.left + bounds.right) / 2 - point.x,
-      (bounds.top + bounds.bottom) / 2 - point.y,
-    );
-    if (distance < nearest) {
-      nearest = distance;
-      index = position;
-    }
-  });
-  return index;
-};
 
 const select = (item: HTMLElement, selector: string | undefined) =>
   selector ? [...item.querySelectorAll(selector)] : [];
@@ -249,17 +233,12 @@ export class Sortable {
     const current = items.indexOf(item);
     if (current < 0 || index < 0 || index >= items.length) return false;
     if (index === current) return false;
-    const siblings = items.filter((element) => element !== item);
-    const rects = record(siblings);
-    if (index > current) {
-      for (const sibling of items.slice(current + 1, index + 1)) {
-        item.before(sibling);
-      }
-    } else {
-      for (const sibling of items.slice(index, current).reverse()) {
-        item.after(sibling);
-      }
-    }
+    const rects = record(items.filter((element) => element !== item));
+    const { before, after } = arrange(current, index);
+    const nodes = (positions: readonly number[]) =>
+      positions.flatMap((position) => items[position] ?? []);
+    item.before(...nodes(before));
+    item.after(...nodes(after));
     play(rects, this.#options.duration ?? 150);
     return true;
   }

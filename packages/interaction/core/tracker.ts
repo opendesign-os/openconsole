@@ -13,7 +13,7 @@ export interface Modifiers {
 export interface Input {
   readonly points: readonly Point<2>[];
   readonly modifiers?: Modifiers;
-  readonly event?: Event;
+  readonly event?: unknown;
   readonly timestamp?: number;
 }
 

@@ -1,8 +1,14 @@
 import { plane } from "@openconsole/matrix";
 
 import { transform, type Plugin, type State, type Step } from "../core";
-import { bind, type Binding, type BindOptions, type Keys } from "../dom";
-import { bounds, grid, gridlines } from "../plugins";
+import {
+  bind,
+  gridlines,
+  type Binding,
+  type BindOptions,
+  type Keys,
+} from "../dom";
+import { bounds, grid } from "../plugins";
 
 export interface DraggableOptions extends Omit<BindOptions, "action"> {
   readonly container?: HTMLElement;

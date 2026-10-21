@@ -17,6 +17,11 @@ export interface Patch {
   readonly index?: number | undefined;
 }
 
+export interface Range {
+  readonly min?: number;
+  readonly max?: number;
+}
+
 export interface Bounds {
   readonly left: number;
   readonly top: number;

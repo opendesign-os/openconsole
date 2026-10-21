@@ -9,6 +9,7 @@ import {
   type Plugin,
   type State,
   type Step,
+  type Store,
 } from "../core";
 import { listen, type Grab, type Keys } from "./keyboard";
 import { Model, type Render } from "./model";
@@ -83,6 +84,7 @@ function listener(options: BindOptions): Plugin {
 export class Binding {
   readonly node: HTMLElement;
   readonly #model: Model;
+  readonly #store: Store;
   readonly #tracker: Tracker;
   readonly #listener: Plugin;
   readonly #target: Target;
@@ -106,11 +108,13 @@ export class Binding {
     this.#listener = listener(options);
     this.#plugins = options.plugins ?? [];
     this.#model = Model.of(node);
+    this.#store = this.#model.store;
     this.#tracker = new Tracker({
       action: options.action,
       plugins: [...this.#plugins, this.#listener],
     });
-    this.#model.join(this.#tracker, options.render);
+    if (options.render) this.#model.render = options.render;
+    this.#store.join(this.#tracker);
     this.#model.assign(options);
     this.#target = {
       limit: () => {
@@ -152,11 +156,11 @@ export class Binding {
   }
 
   start(input: Input): boolean {
-    if (this.#tracker.active || !this.#model.lock(this.#tracker)) return false;
+    if (this.#tracker.active || !this.#store.lock(this.#tracker)) return false;
     this.#model.prepare();
     const frame = this.#model.frame();
     if (!frame) {
-      this.#model.unlock(this.#tracker);
+      this.#store.unlock(this.#tracker);
       return false;
     }
     this.#frame = frame;
@@ -176,7 +180,7 @@ export class Binding {
     if (!this.#tracker.active) return this;
     this.#last = input;
     this.#tracker.move(input);
-    this.#model.commit(this.#tracker.state, this.#tracker);
+    this.#store.commit(this.#tracker.state, this.#tracker);
     this.#notify("onMove");
     return this;
   }
@@ -184,7 +188,7 @@ export class Binding {
   nudge(step: Step): this {
     if (!this.#tracker.active) return this;
     this.#tracker.nudge(step);
-    this.#model.commit(this.#tracker.state, this.#tracker);
+    this.#store.commit(this.#tracker.state, this.#tracker);
     this.#notify("onMove");
     return this;
   }
@@ -201,7 +205,7 @@ export class Binding {
   cancel(): this {
     if (!this.#tracker.active) return this;
     this.#tracker.cancel();
-    this.#model.commit(this.#tracker.state, this.#tracker);
+    this.#store.commit(this.#tracker.state, this.#tracker);
     this.#finish();
     this.#notify("onCancel");
     return this;
@@ -216,7 +220,7 @@ export class Binding {
     if (!frame) return this;
     this.#frame = frame;
     this.#tracker.move(this.#last, frame);
-    this.#model.commit(this.#tracker.state, this.#tracker);
+    this.#store.commit(this.#tracker.state, this.#tracker);
     this.#notify("onMove");
     return this;
   }
@@ -239,7 +243,7 @@ export class Binding {
       action,
       plugins: plugins && [...plugins, this.#listener],
     });
-    if (!this.#tracker.active && this.#model.free(this.#tracker)) {
+    if (!this.#tracker.active && this.#store.free(this.#tracker)) {
       this.#model.assign(options);
     }
     return this;
@@ -291,7 +295,7 @@ export class Binding {
     for (const release of this.#ignores.values()) release();
     this.#handles.clear();
     this.#ignores.clear();
-    this.#model.leave(this.#tracker);
+    this.#store.leave(this.#tracker);
     this.#tracker.destroy();
     return this;
   }
@@ -313,7 +317,7 @@ export class Binding {
   }
 
   #finish(): void {
-    this.#model.unlock(this.#tracker);
+    this.#store.unlock(this.#tracker);
     this.#watch?.abort();
     this.#watch = undefined;
   }

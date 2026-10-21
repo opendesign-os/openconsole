@@ -1,6 +1,6 @@
 import { plane, type Point } from "@openconsole/matrix";
 
-import { center, frame } from "../core";
+import { center, choose, frame, type Candidate } from "../core";
 import { linear, observe, own, rect, size, type Session } from "../dom";
 
 export interface Drag {
@@ -56,19 +56,14 @@ const describe = (session: Session): Drag => ({
 });
 
 function hit(drag: Drag): HTMLElement | undefined {
-  let best: { zone: HTMLElement; score: number } | undefined;
+  const candidates: Candidate<HTMLElement>[] = [];
   for (const [zone, options] of zones) {
     if (zone === drag.node || drag.node.contains(zone)) continue;
     if (options.accept && !options.accept(drag)) continue;
     const score = (options.detect ?? within)(zone, drag);
-    if (score === undefined) continue;
-    const inner = best?.zone.contains(zone) ?? true;
-    const outer = best ? zone.contains(best.zone) : false;
-    if (!best || inner || (!outer && score > best.score)) {
-      best = { zone, score };
-    }
+    if (score !== undefined) candidates.push({ target: zone, score });
   }
-  return best?.zone;
+  return choose(candidates, (outer, inner) => outer.contains(inner));
 }
 
 function track(session: Session): void {
