@@ -8,9 +8,9 @@ import { grid, limits } from "../plugins";
 const at = (x: number, y: number) => ({ points: [{ x, y }] });
 
 describe("Tracker", () => {
-  it("starts idle with the given matrix and size", () => {
+  it("starts idle and takes state through assign", () => {
     expect(new Tracker().state.matrix).toEqual(plane.identity);
-    const tracker = new Tracker({
+    const tracker = new Tracker().assign({
       matrix: plane.translate(5, 6),
       size: { width: 10, height: 20 },
     });
@@ -44,7 +44,7 @@ describe("Tracker", () => {
       plane.rotate(Math.PI / 6),
       plane.scale(1.5, 0.5),
     );
-    const tracker = new Tracker({ matrix: plane.rotate(0.3) });
+    const tracker = new Tracker().assign({ matrix: plane.rotate(0.3) });
     const origin = tracker.state.matrix;
     tracker.start(at(100, 100), plane.invert(container));
     tracker.move(at(137, 81));
@@ -78,9 +78,8 @@ describe("Tracker", () => {
     };
     const origin = plane.translate(1, 2);
     const tracker = new Tracker({
-      matrix: origin,
       plugins: [{ onStart: push, onMove: push, onEnd: push }],
-    });
+    }).assign({ matrix: origin });
     const frame = plane.scale(2);
     const down = at(0, 0);
     const step = at(3, 4);
@@ -162,7 +161,7 @@ describe("Tracker", () => {
 
   it("nudges in container, local and screen space", () => {
     const frame = plane.scale(0.5);
-    const tracker = new Tracker({ matrix: plane.rotate(Math.PI / 2) });
+    const tracker = new Tracker().assign({ matrix: plane.rotate(Math.PI / 2) });
     tracker.start({ points: [] }, frame);
     tracker.nudge({ matrix: plane.translate(10, 0), space: "container" });
     expect(plane.round(tracker.state.matrix)).toEqual(
@@ -186,10 +185,11 @@ describe("Tracker", () => {
 
   it("re-pins a resize after a plugin clamps the size", () => {
     const tracker = new Tracker({
-      matrix: plane.translate(100, 0),
-      size: { width: 100, height: 50 },
       action: resize({ handle: { x: -1, y: 0 } }),
       plugins: [limits({ width: { max: 120 } })],
+    }).assign({
+      matrix: plane.translate(100, 0),
+      size: { width: 100, height: 50 },
     });
     tracker.start(at(100, 0)).move(at(40, 0));
     expect(tracker.state.size.width).toBe(120);
@@ -213,14 +213,13 @@ describe("Tracker", () => {
     tracker.start(at(0, 0)).move(at(5, 0));
     tracker.nudge({ matrix: plane.translate(1, 0), space: "container" });
     tracker.cancel();
-    tracker.update({ matrix: plane.translate(9, 0) });
+    tracker.assign({ matrix: plane.translate(9, 0) });
     expect(changes).toEqual([5, 6, 0, 9]);
   });
 
   it("cancels back to the origin and calls onCancel instead of onEnd", () => {
     const calls: string[] = [];
     const tracker = new Tracker({
-      matrix: plane.translate(3, 0),
       plugins: [
         {
           onEnd: () => {
@@ -231,7 +230,7 @@ describe("Tracker", () => {
           },
         },
       ],
-    });
+    }).assign({ matrix: plane.translate(3, 0) });
     tracker.start(at(0, 0)).move(at(50, 0)).cancel();
     expect(calls).toEqual(["cancel 3"]);
     expect(tracker.state.matrix).toEqual(plane.translate(3, 0));
@@ -240,19 +239,20 @@ describe("Tracker", () => {
 
   it("attaches plugins with the current state and detaches them once on destroy", () => {
     const calls: string[] = [];
-    const tracker = new Tracker({
-      matrix: plane.translate(7, 0),
-      plugins: [
-        {
-          onAttach: ({ state }) => {
-            calls.push(`attach ${state.matrix[4]}`);
+    const tracker = new Tracker()
+      .assign({ matrix: plane.translate(7, 0) })
+      .update({
+        plugins: [
+          {
+            onAttach: ({ state }) => {
+              calls.push(`attach ${state.matrix[4]}`);
+            },
+            onDetach: () => {
+              calls.push("detach");
+            },
           },
-          onDetach: () => {
-            calls.push("detach");
-          },
-        },
-      ],
-    });
+        ],
+      });
     tracker.destroy();
     tracker.destroy();
     expect(calls).toEqual(["attach 7", "detach"]);
@@ -309,56 +309,6 @@ describe("Tracker", () => {
     ]);
   });
 
-  it("appends plugins with `use`, one or many at a time, each only once", () => {
-    const calls: string[] = [];
-    const named = (name: string): Plugin => ({
-      onAttach: () => {
-        calls.push(`attach ${name}`);
-      },
-      onMove: () => {
-        calls.push(`move ${name}`);
-      },
-    });
-    const first = named("first");
-    new Tracker()
-      .use(first)
-      .use([named("second"), first, named("third")])
-      .start(at(0, 0))
-      .move(at(1, 0));
-    expect(calls).toEqual([
-      "attach first",
-      "attach second",
-      "attach third",
-      "move first",
-      "move second",
-      "move third",
-    ]);
-  });
-
-  it("appends to a pending swap when `use` is called during a session", () => {
-    const calls: string[] = [];
-    const named = (name: string): Plugin => ({
-      onAttach: () => {
-        calls.push(`attach ${name}`);
-      },
-      onDetach: () => {
-        calls.push(`detach ${name}`);
-      },
-    });
-    const tracker = new Tracker({ plugins: [named("old")] })
-      .start(at(0, 0))
-      .update({ plugins: [named("next")] })
-      .use(named("extra"));
-    expect(calls).toEqual(["attach old"]);
-    tracker.end(at(0, 0));
-    expect(calls).toEqual([
-      "attach old",
-      "detach old",
-      "attach next",
-      "attach extra",
-    ]);
-  });
-
   it("cancels an active session on destroy", () => {
     const calls: string[] = [];
     const tracker = new Tracker({
@@ -386,16 +336,16 @@ describe("Tracker", () => {
   it("ignores state updates while active and applies them when idle", () => {
     const tracker = new Tracker();
     tracker.start(at(0, 0));
-    tracker.update({ matrix: plane.translate(99, 99) });
+    tracker.assign({ matrix: plane.translate(99, 99) });
     tracker.move(at(5, 5));
     expect(plane.round(tracker.state.matrix)).toEqual(plane.translate(5, 5));
     tracker.end(at(5, 5));
-    tracker.update({ matrix: plane.translate(99, 99), index: 3 });
+    tracker.assign({ matrix: plane.translate(99, 99), index: 3 });
     expect(tracker.state.matrix).toEqual(plane.translate(99, 99));
     expect(tracker.state.index).toBe(3);
   });
 
-  it("swaps plugins before announcing a state passed along with them", () => {
+  it("announces assigned state to the plugins swapped in before it", () => {
     const calls: string[] = [];
     const old: Plugin = {
       onChange: () => {
@@ -414,7 +364,9 @@ describe("Tracker", () => {
       },
     };
     const tracker = new Tracker({ plugins: [old] });
-    tracker.update({ matrix: plane.translate(8, 0), plugins: [next] });
+    tracker
+      .update({ plugins: [next] })
+      .assign({ matrix: plane.translate(8, 0) });
     expect(calls).toEqual(["old detach", "next attach 0", "next change 8"]);
   });
 

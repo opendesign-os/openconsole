@@ -5,14 +5,12 @@ import {
   type Action,
   type Context,
   type Input,
-  type Patch,
   type Plugin,
-  type State,
   type Step,
-  type Store,
+  type TrackerOptions,
 } from "../core";
+import type { Patch, State } from "../model";
 import { listen, type Grab, type Keys } from "./keyboard";
-import { Model, type Render } from "./model";
 import {
   forget,
   register,
@@ -20,6 +18,7 @@ import {
   type Marker,
   type Target,
 } from "./router";
+import { View, type Render } from "./view";
 
 export interface Session {
   readonly node: HTMLElement;
@@ -37,7 +36,7 @@ export interface Observer {
   onCancel?(session: Session): void;
 }
 
-export interface BindOptions extends Patch {
+export interface BindOptions {
   readonly action: Action;
   readonly handle?: Element | readonly Element[];
   readonly ignore?: Element | readonly Element[];
@@ -47,16 +46,10 @@ export interface BindOptions extends Patch {
   readonly render?: Render;
   readonly keys?: Keys;
   readonly data?: unknown;
-  readonly signal?: AbortSignal;
   readonly onStart?: (context: Context) => void;
   readonly onMove?: (context: Context) => void;
   readonly onEnd?: (context: Context) => void;
   readonly onCancel?: (context: Context) => void;
-}
-
-interface Update extends Patch {
-  readonly action?: Action | undefined;
-  readonly plugins?: readonly Plugin[] | undefined;
 }
 
 const observers = new Set<Observer>();
@@ -83,8 +76,7 @@ function listener(options: BindOptions): Plugin {
 
 export class Binding {
   readonly node: HTMLElement;
-  readonly #model: Model;
-  readonly #store: Store;
+  readonly #view: View;
   readonly #tracker: Tracker;
   readonly #listener: Plugin;
   readonly #target: Target;
@@ -95,7 +87,6 @@ export class Binding {
   readonly #data: unknown;
   #implicit: (() => void) | undefined;
   #alive = true;
-  #plugins: readonly Plugin[];
   #frame: Matrix<2, "affine"> | undefined;
   #last: Input = { points: [] };
   #watch: AbortController | undefined;
@@ -106,45 +97,37 @@ export class Binding {
     this.#data = options.data;
     this.#priority = priority;
     this.#listener = listener(options);
-    this.#plugins = options.plugins ?? [];
-    this.#model = Model.of(node);
-    this.#store = this.#model.store;
+    this.#view = View.of(node);
     this.#tracker = new Tracker({
       action: options.action,
-      plugins: [...this.#plugins, this.#listener],
+      plugins: [...(options.plugins ?? []), this.#listener],
     });
-    if (options.render) this.#model.render = options.render;
-    this.#store.join(this.#tracker);
-    this.#model.assign(options);
+    if (options.render) this.#view.render = options.render;
+    this.#view.store.join(this.#tracker);
+    const control = {
+      start: (input: Input) => this.start(input),
+      end: (input: Input) => this.end(input),
+      cancel: () => this.cancel(),
+    };
     this.#target = {
+      ...control,
+      move: (input) => this.move(input),
       limit: () => {
         const { freedom } = this.#tracker.action;
         return freedom.rotate || freedom.scale ? 2 : 1;
       },
       activation: (type) =>
         typeof activation === "function" ? activation(type) : activation,
-      start: (input) => this.start(input),
-      move: (input) => this.move(input),
-      end: (input) => this.end(input),
-      cancel: () => this.cancel(),
     };
     this.#grab = keys && {
+      ...control,
+      nudge: (step) => this.nudge(step),
       keys,
       state: () => this.#tracker.state,
-      start: (input) => this.start(input),
-      nudge: (step) => this.nudge(step),
-      end: (input) => this.end(input),
-      cancel: () => this.cancel(),
     };
     for (const element of list(options.handle)) this.handle(element);
-    if (this.#handles.size === 0) {
-      this.#implicit = this.#mark(node, "handle", priority);
-    }
     for (const element of list(options.ignore)) this.ignore(element);
-    const { signal } = options;
-    if (signal?.aborted) this.destroy();
-    else
-      signal?.addEventListener("abort", () => this.destroy(), { once: true });
+    this.#sync();
   }
 
   get state(): State {
@@ -156,11 +139,12 @@ export class Binding {
   }
 
   start(input: Input): boolean {
-    if (this.#tracker.active || !this.#store.lock(this.#tracker)) return false;
-    this.#model.prepare();
-    const frame = this.#model.frame();
+    const { store } = this.#view;
+    if (this.#tracker.active || !store.lock(this.#tracker)) return false;
+    this.#view.prepare();
+    const frame = this.#view.frame();
     if (!frame) {
-      this.#store.unlock(this.#tracker);
+      store.unlock(this.#tracker);
       return false;
     }
     this.#frame = frame;
@@ -180,7 +164,7 @@ export class Binding {
     if (!this.#tracker.active) return this;
     this.#last = input;
     this.#tracker.move(input);
-    this.#store.commit(this.#tracker.state, this.#tracker);
+    this.#commit();
     this.#notify("onMove");
     return this;
   }
@@ -188,7 +172,7 @@ export class Binding {
   nudge(step: Step): this {
     if (!this.#tracker.active) return this;
     this.#tracker.nudge(step);
-    this.#store.commit(this.#tracker.state, this.#tracker);
+    this.#commit();
     this.#notify("onMove");
     return this;
   }
@@ -196,112 +180,105 @@ export class Binding {
   end(input?: Input): this {
     if (!this.#tracker.active) return this;
     if (input && input.points.length > 0) this.#last = input;
-    this.#tracker.end(input);
     this.#finish();
+    this.#tracker.end(input);
     this.#notify("onEnd");
     return this;
   }
 
   cancel(): this {
     if (!this.#tracker.active) return this;
-    this.#tracker.cancel();
-    this.#store.commit(this.#tracker.state, this.#tracker);
     this.#finish();
+    this.#tracker.cancel();
+    this.#commit();
     this.#notify("onCancel");
     return this;
   }
 
   refresh(): this {
     if (!this.#tracker.active) {
-      this.#model.prepare();
+      this.#view.prepare();
       return this;
     }
-    const frame = this.#model.frame();
+    const frame = this.#view.frame();
     if (!frame) return this;
     this.#frame = frame;
     this.#tracker.move(this.#last, frame);
-    this.#store.commit(this.#tracker.state, this.#tracker);
+    this.#commit();
     this.#notify("onMove");
     return this;
   }
 
   relayout(): this {
-    this.#model.relayout();
+    this.#view.relayout();
     return this;
   }
 
-  use(plugins: Plugin | readonly Plugin[]): this {
-    return this.update({
-      plugins: [...new Set(this.#plugins.concat(plugins))],
-    });
-  }
-
-  update(options: Update): this {
-    const { action, plugins } = options;
-    if (plugins) this.#plugins = plugins;
+  update({ action, plugins }: TrackerOptions): this {
     this.#tracker.update({
       action,
       plugins: plugins && [...plugins, this.#listener],
     });
-    if (!this.#tracker.active && this.#store.free(this.#tracker)) {
-      this.#model.assign(options);
-    }
     return this;
   }
 
-  handle(element: Element, options: { readonly priority?: number } = {}) {
-    this.#handles.get(element)?.();
-    this.#implicit?.();
-    this.#implicit = undefined;
-    const release = this.#mark(
-      element,
-      "handle",
-      options.priority ?? this.#priority,
-    );
-    this.#handles.set(element, release);
-    return (): void => {
-      if (this.#handles.get(element) !== release) return;
-      this.#handles.delete(element);
-      release();
-      if (this.#handles.size === 0 && this.#alive) {
-        this.#implicit = this.#mark(this.node, "handle", this.#priority);
-      }
-    };
+  assign(patch: Patch): this {
+    this.#view.store.assign(patch);
+    return this;
   }
 
-  ignore(element: Element, options: { readonly priority?: number } = {}) {
-    this.#ignores.get(element)?.();
-    const release = this.#mark(
-      element,
-      "ignore",
-      options.priority ?? this.#priority,
-    );
-    this.#ignores.set(element, release);
-    return (): void => {
-      if (this.#ignores.get(element) !== release) return;
-      this.#ignores.delete(element);
-      release();
-    };
+  handle(element: Element, { priority = this.#priority } = {}): () => void {
+    return this.#add(this.#handles, element, "handle", priority);
   }
 
-  destroy(): this {
-    if (!this.#alive) return this;
+  ignore(element: Element, { priority = this.#priority } = {}): () => void {
+    return this.#add(this.#ignores, element, "ignore", priority);
+  }
+
+  destroy(): void {
+    if (!this.#alive) return;
     this.#alive = false;
     this.cancel();
     forget(this.#target);
-    this.#implicit?.();
-    this.#implicit = undefined;
     for (const release of this.#handles.values()) release();
     for (const release of this.#ignores.values()) release();
     this.#handles.clear();
     this.#ignores.clear();
-    this.#store.leave(this.#tracker);
+    this.#sync();
+    this.#view.store.leave(this.#tracker);
     this.#tracker.destroy();
-    return this;
   }
 
   [Symbol.dispose](): void {
     this.destroy();
+  }
+
+  #add(
+    marks: Map<Element, () => void>,
+    element: Element,
+    kind: Marker["kind"],
+    priority: number,
+  ): () => void {
+    marks.get(element)?.();
+    const release = this.#mark(element, kind, priority);
+    marks.set(element, release);
+    this.#sync();
+    return () => {
+      if (marks.get(element) !== release) return;
+      marks.delete(element);
+      release();
+      this.#sync();
+    };
+  }
+
+  #sync(): void {
+    const implicit = this.#alive && this.#handles.size === 0;
+    if (implicit && !this.#implicit) {
+      this.#implicit = this.#mark(this.node, "handle", this.#priority);
+    } else if (!implicit && this.#implicit) {
+      this.#implicit();
+      this.#implicit = undefined;
+    }
   }
 
   #mark(element: Element, kind: Marker["kind"], priority: number): () => void {
@@ -316,8 +293,12 @@ export class Binding {
     };
   }
 
+  #commit(): void {
+    this.#view.store.commit(this.#tracker.state, this.#tracker);
+  }
+
   #finish(): void {
-    this.#store.unlock(this.#tracker);
+    this.#view.store.unlock(this.#tracker);
     this.#watch?.abort();
     this.#watch = undefined;
   }

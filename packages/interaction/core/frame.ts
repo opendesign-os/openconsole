@@ -1,6 +1,6 @@
 import { plane, type Matrix } from "@openconsole/matrix";
 
-import type { Bounds, State } from "./state";
+import type { Bounds, State } from "../model";
 
 export function frame(
   linear: Matrix<2, "affine">,

@@ -18,9 +18,8 @@ describe("grid", () => {
   });
 
   it("snaps the translation itself rather than the movement", () => {
-    const tracker = new Tracker({
+    const tracker = new Tracker({ plugins: [grid(10)] }).assign({
       matrix: plane.translate(3, 0),
-      plugins: [grid(10)],
     });
     const { state } = drag(tracker, 1, 0);
     expect(plane.round(state.matrix)).toEqual(plane.identity);
@@ -35,7 +34,7 @@ describe("grid", () => {
   it("keeps the linear part", () => {
     const origin = plane.rotate(0.5);
     const { state } = drag(
-      new Tracker({ matrix: origin, plugins: [grid(10)] }),
+      new Tracker({ plugins: [grid(10)] }).assign({ matrix: origin }),
       27,
       34,
     );
@@ -49,10 +48,9 @@ describe("grid", () => {
   it("snaps the size along the moving edges of a resize", () => {
     const { state } = drag(
       new Tracker({
-        size: { width: 40, height: 40 },
         action: resize({ handle: { x: 1, y: 0 } }),
         plugins: [grid(10)],
-      }),
+      }).assign({ size: { width: 40, height: 40 } }),
       23,
       17,
     );

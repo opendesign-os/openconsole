@@ -1,7 +1,7 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
+import { merge, type Patch, type State } from "../model";
 import { anchor, pin, resizes, transform, type Action } from "./action";
-import { merge, type Patch, type State } from "./state";
 
 export interface Modifiers {
   readonly shift: boolean;
@@ -42,7 +42,7 @@ export interface Plugin {
   onDetach?(): void;
 }
 
-export interface TrackerOptions extends Patch {
+export interface TrackerOptions {
   readonly action?: Action | undefined;
   readonly plugins?: readonly Plugin[] | undefined;
 }
@@ -81,14 +81,13 @@ function apply(
 }
 
 export class Tracker {
-  #state: State;
+  #state = initial;
   #action: Action;
   #plugins: readonly Plugin[] = [];
   #pending: readonly Plugin[] | undefined;
   #session: Session | undefined;
 
   constructor(options: TrackerOptions = {}) {
-    this.#state = merge(initial, options);
     this.#action = options.action ?? transform({ translate: true });
     this.#swap(options.plugins ?? []);
   }
@@ -105,19 +104,17 @@ export class Tracker {
     return this.#session !== undefined;
   }
 
-  use(plugins: Plugin | readonly Plugin[]): this {
-    const current = this.#pending ?? this.#plugins;
-    return this.update({ plugins: [...new Set(current.concat(plugins))] });
-  }
-
-  update(options: TrackerOptions): this {
-    const { plugins, action } = options;
+  update({ action, plugins }: TrackerOptions): this {
     if (plugins) {
       if (this.#session) this.#pending = plugins;
       else this.#swap(plugins);
     }
     if (action) this.#action = action;
-    const state = merge(this.#state, options);
+    return this;
+  }
+
+  assign(patch: Patch): this {
+    const state = merge(this.#state, patch);
     if (state !== this.#state && !this.#session) this.#change(state);
     return this;
   }

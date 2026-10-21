@@ -68,9 +68,8 @@ const cards = [...board.querySelectorAll<HTMLElement>(".card")].map(
     return {
       drag: new Draggable(card, {
         container: board,
-        matrix: home(index),
         plugins: [label(card)],
-      }),
+      }).assign({ matrix: home(index) }),
       rotate: new Rotatable(card, { handle: grip, step: Math.PI / 12 }),
       resize: new Resizable(card, {
         handles: edges(card),
@@ -102,8 +101,8 @@ for (const input of [snap, lines, step, zoom, turn]) {
 }
 reset.addEventListener("click", () => {
   cards.forEach(({ drag, resize }, index) => {
-    resize.update({ size });
-    drag.update({ matrix: home(index) });
+    resize.assign({ size });
+    drag.assign({ matrix: home(index) });
   });
 });
 apply();

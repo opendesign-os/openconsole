@@ -1,94 +1,50 @@
 import { plane, type Point } from "@openconsole/matrix";
 
-import { transform, type Plugin, type State, type Step } from "../core";
-import { bind, type Binding, type BindOptions, type Keys } from "../dom";
+import { transform, type Step } from "../core";
+import { bind, View, type BindOptions, type Keys } from "../dom";
+import { Shape, type CapabilityOptions, type Part, type State } from "../model";
 import { angle } from "../plugins";
 
-export interface RotatableOptions extends Omit<
-  BindOptions,
-  "action" | "handle"
-> {
+export interface RotatableOptions
+  extends Omit<BindOptions, "action" | "handle">, CapabilityOptions {
   readonly handle: Element | readonly Element[];
   readonly pivot?: Point<2>;
   readonly step?: number;
 }
 
-type Settings = Pick<RotatableOptions, "pivot" | "step" | "plugins">;
+function turns(pivot: Point<2> | undefined, unit: number): Keys {
+  const turn =
+    (factor: number) =>
+    (state: State): Step => ({
+      matrix: plane.around(
+        pivot ?? { x: state.size.width / 2, y: state.size.height / 2 },
+        plane.rotate(factor * unit),
+      ),
+      space: "local",
+    });
+  return {
+    ArrowLeft: turn(-1),
+    ArrowRight: turn(1),
+    "Shift+ArrowLeft": turn(-15),
+    "Shift+ArrowRight": turn(15),
+  };
+}
 
-const degree = Math.PI / 180;
-
-export class Rotatable {
-  readonly node: HTMLElement;
-  readonly #binding: Binding;
-  #settings: Settings;
-
+export class Rotatable extends Shape<HTMLElement, RotatableOptions> {
   constructor(node: HTMLElement, options: RotatableOptions) {
-    const { pivot } = options;
-    this.node = node;
-    this.#settings = options;
-    this.#binding = bind(node, {
-      ...options,
-      action: transform({ rotate: true, ...(pivot ? { pivot } : {}) }),
-      plugins: this.#plugins(),
-      keys: options.keys ?? this.#keys(),
-    });
+    super(node, View.of(node).store, options);
+    this.refresh();
   }
 
-  get state(): State {
-    return this.#binding.state;
-  }
-
-  get active(): boolean {
-    return this.#binding.active;
-  }
-
-  use(plugins: Plugin | readonly Plugin[]): this {
-    const { plugins: current = [] } = this.#settings;
-    return this.update({ plugins: [...new Set(current.concat(plugins))] });
-  }
-
-  update(options: Pick<RotatableOptions, "step" | "plugins" | "matrix">): this {
-    const { matrix, ...settings } = options;
-    this.#settings = { ...this.#settings, ...settings };
-    this.#binding.update({
-      matrix,
-      plugins: Object.keys(settings).length > 0 ? this.#plugins() : undefined,
-    });
-    return this;
-  }
-
-  destroy(): this {
-    this.#binding.destroy();
-    return this;
-  }
-
-  [Symbol.dispose](): void {
-    this.destroy();
-  }
-
-  #plugins(): readonly Plugin[] {
-    const { step, plugins = [] } = this.#settings;
-    return [...(step ? [angle(step)] : []), ...plugins];
-  }
-
-  #keys(): Keys {
-    const turn =
-      (sign: number, factor: number) =>
-      (state: State): Step => {
-        const { pivot, step = degree } = this.#settings;
-        return {
-          matrix: plane.around(
-            pivot ?? { x: state.size.width / 2, y: state.size.height / 2 },
-            plane.rotate(sign * factor * step),
-          ),
-          space: "local",
-        };
-      };
-    return {
-      ArrowLeft: turn(-1, 1),
-      ArrowRight: turn(1, 1),
-      "Shift+ArrowLeft": turn(-1, 15),
-      "Shift+ArrowRight": turn(1, 15),
-    };
+  protected build(): readonly Part[] {
+    const { pivot, step, plugins = [], keys } = this.options;
+    return [
+      bind(this.node, {
+        ...this.options,
+        action: transform({ rotate: true, ...(pivot ? { pivot } : {}) }),
+        plugins: [...(step ? [angle(step)] : []), ...plugins],
+        keys: keys ?? turns(pivot, step ?? Math.PI / 180),
+      }),
+    ];
   }
 }

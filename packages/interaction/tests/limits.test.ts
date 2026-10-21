@@ -8,10 +8,9 @@ import { bounds, limits } from "../plugins";
 describe("limits", () => {
   it("clamps the size along the moving edges", () => {
     const tracker = new Tracker({
-      size: { width: 50, height: 50 },
       action: resize({ handle: { x: 1, y: 1 } }),
       plugins: [limits({ width: { min: 40, max: 80 }, height: { min: 45 } })],
-    });
+    }).assign({ size: { width: 50, height: 50 } });
     tracker.start({ points: [{ x: 0, y: 0 }] });
     tracker.move({ points: [{ x: 100, y: -30 }] });
     expect(tracker.state.size).toEqual({ width: 80, height: 45 });
@@ -43,13 +42,12 @@ describe("limits", () => {
 
   it("wins over bounds when listed after it", () => {
     const tracker = new Tracker({
-      size: { width: 50, height: 50 },
       action: resize({ handle: { x: 1, y: 0 } }),
       plugins: [
         bounds(() => ({ left: 0, top: 0, right: 300, bottom: 300 })),
         limits({ width: { max: 120 } }),
       ],
-    });
+    }).assign({ size: { width: 50, height: 50 } });
     tracker.start({ points: [{ x: 0, y: 0 }] });
     tracker.move({ points: [{ x: 500, y: 0 }] });
     expect(tracker.state.size.width).toBe(120);

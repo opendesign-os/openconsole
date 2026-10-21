@@ -2,12 +2,10 @@ import { plane } from "@openconsole/matrix";
 
 import {
   arrange,
-  center,
   closest,
   transform,
   type Plugin,
   type Slot,
-  type State,
   type Step,
 } from "../core";
 import {
@@ -19,6 +17,13 @@ import {
   type BindOptions,
   type Keys,
 } from "../dom";
+import {
+  Capability,
+  center,
+  type CapabilityOptions,
+  type Part,
+  type State,
+} from "../model";
 
 export interface Place {
   readonly list: HTMLElement;
@@ -31,10 +36,10 @@ export interface Sort {
   readonly to: Place;
 }
 
-export interface SortableOptions extends Omit<
-  BindOptions,
-  "action" | "handle" | "ignore" | "keys" | "matrix" | "size" | "index"
-> {
+export interface SortableOptions
+  extends
+    Omit<BindOptions, "action" | "handle" | "ignore" | "keys">,
+    CapabilityOptions {
   readonly items?: string;
   readonly handle?: string;
   readonly ignore?: string;
@@ -76,78 +81,50 @@ function play(rects: Map<HTMLElement, DOMRect>, duration: number): void {
   }
 }
 
-export class Sortable {
-  readonly node: HTMLElement;
-  readonly #options: SortableOptions;
-  readonly #bindings = new Map<HTMLElement, Binding>();
-
+export class Sortable extends Capability<
+  HTMLElement,
+  SortableOptions,
+  Binding
+> {
   constructor(list: HTMLElement, options: SortableOptions = {}) {
-    this.node = list;
-    this.#options = options;
+    super(list, options);
     this.refresh();
   }
 
   get items(): HTMLElement[] {
-    const selector = this.#options.items ?? ":scope > *";
+    const selector = this.options.items ?? ":scope > *";
     return [...this.node.querySelectorAll(selector)].filter(
       (element) => element instanceof HTMLElement,
     );
   }
 
-  refresh(): this {
-    const items = this.items;
-    for (const [item, binding] of this.#bindings) {
-      if (items.includes(item)) continue;
-      binding.destroy();
-      this.#bindings.delete(item);
-    }
-    items.forEach((item, index) => {
-      const binding = this.#bindings.get(item);
-      if (binding) binding.update({ index });
-      else this.#bindings.set(item, this.#bind(item, index));
-    });
-    return this;
-  }
-
   move(item: HTMLElement, index: number): this {
     const from = this.items.indexOf(item);
-    if ([...this.#bindings.values()].some((binding) => binding.active)) {
-      return this;
-    }
-    if (!this.#reorder(item, index)) return this;
-    this.refresh();
+    if (this.active || !this.#reorder(item, index)) return this;
+    this.#index();
     this.#announce(item, from);
     return this;
   }
 
-  destroy(): this {
-    for (const binding of this.#bindings.values()) binding.destroy();
-    this.#bindings.clear();
-    return this;
-  }
-
-  [Symbol.dispose](): void {
-    this.destroy();
-  }
-
-  #bind(item: HTMLElement, index: number): Binding {
-    const { handle, ignore, plugins = [] } = this.#options;
-    return bind(item, {
-      activation,
-      ...this.#options,
-      handle: select(item, handle),
-      ignore: select(item, ignore),
-      action: transform({ translate: true }),
-      plugins: [this.#slot(), ...plugins, this.#apply(item)],
-      keys: this.#keys(item),
-      index,
-    });
+  protected build(): readonly Part<Binding>[] {
+    const { handle, ignore, plugins = [] } = this.options;
+    return this.items.map((item, index) =>
+      bind(item, {
+        activation,
+        ...this.options,
+        handle: select(item, handle),
+        ignore: select(item, ignore),
+        action: transform({ translate: true }),
+        plugins: [this.#slot(), ...plugins, this.#apply(item)],
+        keys: this.#keys(item),
+      }).assign({ index }),
+    );
   }
 
   #slot(): Plugin {
     return {
       onMove: ({ state }) => {
-        const index = (this.#options.slot ?? closest)(
+        const index = (this.options.slot ?? closest)(
           center(state),
           this.items.map(box),
         );
@@ -177,14 +154,14 @@ export class Sortable {
       from = -1;
       if (restore) this.#reorder(item, start);
       const before = record([item]);
-      const binding = this.#bindings.get(item);
+      const binding = this.#binding(item);
       binding?.relayout();
-      binding?.update({
+      binding?.assign({
         matrix: plane.translate(item.offsetLeft, item.offsetTop),
       });
-      play(before, this.#options.duration ?? 150);
+      play(before, this.options.duration ?? 150);
       drop();
-      this.refresh();
+      this.#index();
       if (!restore) this.#announce(item, start);
     };
     return {
@@ -194,9 +171,7 @@ export class Sortable {
       },
       onChange: ({ state }) => {
         if (from < 0 || state.index === undefined) return;
-        if (this.#reorder(item, state.index)) {
-          this.#bindings.get(item)?.relayout();
-        }
+        if (this.#reorder(item, state.index)) this.#binding(item)?.relayout();
       },
       onEnd: () => settle(false),
       onCancel: () => settle(true),
@@ -239,14 +214,25 @@ export class Sortable {
       positions.flatMap((position) => items[position] ?? []);
     item.before(...nodes(before));
     item.after(...nodes(after));
-    play(rects, this.#options.duration ?? 150);
+    play(rects, this.options.duration ?? 150);
     return true;
+  }
+
+  #binding(item: HTMLElement): Binding | undefined {
+    return this.units.find((binding) => binding.node === item);
+  }
+
+  #index(): void {
+    const items = this.items;
+    for (const binding of this.units) {
+      binding.assign({ index: items.indexOf(binding.node) });
+    }
   }
 
   #announce(item: HTMLElement, from: number): void {
     const to = this.items.indexOf(item);
     if (from < 0 || to < 0 || from === to) return;
-    this.#options.onSort?.({
+    this.options.onSort?.({
       item,
       from: { list: this.node, index: from },
       to: { list: this.node, index: to },

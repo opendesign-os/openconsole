@@ -4,13 +4,13 @@
 
 ## 特性
 
-- **六项能力**:`Draggable`、`Rotatable`、`Resizable`、`Zoomable`、`Droppable`、`Sortable`,都是 `bind` 的预设
+- **六项能力**:`Draggable`、`Rotatable`、`Resizable`、`Zoomable`、`Droppable`、`Sortable`,共用一份约定,建立在 `bind` 与 `observe` 之上
 - **统一状态**:`State { matrix, size, index? }`,所有能力、所有插件读写同一种状态
 - **统一输入**:指针(最多两指)、键盘、滚轮与程序调用都换算成同一种输入,经矩阵引擎进入容器空间
 - **精确跟手**:祖先带旋转、斜切、非等比缩放时,拖拽、旋转、双指与调整尺寸仍贴着指针
 - **可扩展**:动作(`Action`)、插件(`Plugin`)、旁观者(`observe`)与渲染(`render`)都可替换
 - **无障碍**:键盘抓取与移动、Esc 取消,排序提供非拖拽的 `move()`
-- **逻辑与 DOM 分离**:`core/` 与 `plugins/` 不引用任何 DOM API 或类型,在 Node 中测试;读写 DOM 只在 `dom/`,`capabilities/` 负责组装;导入时不访问 DOM
+- **逻辑与 DOM 分离**:`model/`、`core/` 与 `plugins/` 不引用任何 DOM API 或类型,在 Node 中测试;读写 DOM 只在 `dom/`,`capabilities/` 负责组装;导入时不访问 DOM
 - 唯一依赖 `@openconsole/matrix`
 
 ## 在本仓库中使用
@@ -31,11 +31,14 @@
 import { Draggable } from "@openconsole/interaction";
 import { plane } from "@openconsole/matrix";
 
-const drag = new Draggable(card, { container: board, grid: 20 }); // 限定在 board 内,画 20px 网格并吸附
-drag.handle(title); // 只能从标题栏拖
-drag.ignore(badge); // 标题栏里的徽标不触发
-drag.update({ snap: false }); // 只关吸附
-drag.update({ matrix: plane.translate(120, 80) }); // 直接改位置(容器坐标)
+const drag = new Draggable(card, {
+  container: board, // 限定在 board 内
+  grid: 20, // 画 20px 网格并吸附
+  handle: title, // 只能从标题栏拖
+  ignore: badge, // 标题栏里的徽标不触发
+});
+drag.update({ snap: false }); // 只改传入的选项
+drag.assign({ matrix: plane.translate(120, 80) }); // 写状态:直接改位置(容器坐标)
 drag.destroy();
 ```
 
@@ -88,8 +91,8 @@ list.move(item, 0); // 不拖拽也能排序
 
 句柄决定从哪里按下才开始,排除区决定从哪里按下不开始;参照 neodrag v3 的规则:
 
-- 通过 `handle`、`ignore` 选项,或 `binding.handle(element, { priority })`、`binding.ignore(element, { priority })` 登记;
-  后两者返回注销函数,可直接用作框架的 ref 回调
+- 能力通过 `handle`、`ignore` 选项登记,用 `update` 替换;`bind` 返回的 `Binding` 另有 `handle(element, { priority })`、
+  `ignore(element, { priority })`,返回注销函数,可直接用作框架的 ref 回调
 - 沿 `composedPath()` 由内向外,最内层的标记决定;外层标记的 `priority` 更高时可以覆盖内层
 - 没有登记句柄时整个节点都是句柄;登记后只有句柄内的按下才开始,注销到一个不剩时恢复为整个节点
 - 被排除或不在句柄上的按下会继续交给外层的绑定,例如画布里卡片正文上的按下会平移画布;输入框、按钮等交互元素上的按下始终不触发
@@ -140,7 +143,7 @@ interface Plugin {
   onMove?(context: Context): State | void; // 返回状态即替换候选
   onEnd?(context: Context): void;
   onCancel?(context: Context): void;
-  onChange?(context: { state }): void; // 每次提交后一次:移动、nudge、update、cancel
+  onChange?(context: { state }): void; // 每次提交后一次:移动、nudge、assign、cancel
   onDetach?(): void;
 }
 ```
@@ -195,12 +198,10 @@ const stop = observe({ onMove: ({ node, state, input, data }) => {} }); // 旁�
 | `keys`                                   | 键盘映射:键名或 `Shift+键名` → `Step` 或返回 `Step` 的函数 |
 | `render`                                 | 替换默认的 CSS 写入                                        |
 | `data`                                   | 交给旁观者的载荷,放置时可读                                |
-| `matrix`、`size`、`index`                | 初始状态                                                   |
-| `signal`                                 | 中止时自动销毁                                             |
 | `onStart`、`onMove`、`onEnd`、`onCancel` | 会话回调                                                   |
 
 `Binding` 提供 `state`、`active`、`start(input)`、`move(input)`、`nudge(step)`、`end(input?)`、`cancel()`、`refresh()`、
-`relayout()`、`use(plugins)`、`update(options)`、`handle(element, options?)`、`ignore(element, options?)`、`destroy()`
+`relayout()`、`update({ action, plugins })`、`assign(patch)`、`handle(element, options?)`、`ignore(element, options?)`、`destroy()`
 与 `[Symbol.dispose]()`。手柄、笔或回放等自定义输入直接调用这些方法。
 
 ### 输入与步进
@@ -222,13 +223,14 @@ interface Step {
 
 ### 脱离 DOM
 
-`Tracker` 是不依赖 DOM 的流水线,可用于 canvas、测试与回放;`frame` 为屏幕 → 状态所在空间的仿射映射:
+`Tracker` 是不依赖 DOM 的流水线,可用于 canvas、测试与回放;选项只放 `action` 与 `plugins`(`update` 替换),
+状态经 `assign` 写入(会话中不生效);`frame` 为屏幕 → 状态所在空间的仿射映射:
 
 ```ts
 import { grid, Tracker } from "@openconsole/interaction";
 import { plane } from "@openconsole/matrix";
 
-const tracker = new Tracker().use(grid(20));
+const tracker = new Tracker({ plugins: [grid(20)] }).assign({ size: { width: 80, height: 40 } });
 const frame = plane.invert(view) ?? plane.identity; // view:场景到客户区的视图矩阵
 
 canvas.addEventListener("pointerdown", (event) => tracker.start({ points: [event] }, frame));
@@ -240,12 +242,26 @@ canvas.addEventListener("pointermove", (event) => {
 canvas.addEventListener("pointerup", () => tracker.end());
 ```
 
-多个 `Tracker` 共享同一份状态时用 `Store`:`join` 登记、`lock` 保证同一时间只有一个会话、`commit` 写入并同步给其他 `Tracker`。
-DOM 层的 Model 就是在 `Store` 之上加了折叠、测量与渲染。
+多个 `Tracker` 共享同一份状态时用 `Store`:`join` 登记、`lock` 保证同一时间只有一个会话、`commit` 写入并同步给其他 `Tracker`、
+`assign` 只在没有会话时写入。DOM 层的 `View` 在 `Store` 之上加了折叠、测量与渲染。
 
 ## API
 
 ### 能力
+
+所有能力共用一份约定:
+
+| 成员                   | 说明                                                                      |
+| ---------------------- | ------------------------------------------------------------------------- |
+| `new X(node, options)` | 创建并立即生效                                                            |
+| `node`                 | 能力所在的节点                                                            |
+| `active`               | 是否有交互正在进行;`Droppable` 为是否有拖拽停在本区域上                   |
+| `update(options)`      | 只写传入的选项,随后按当前选项重建;会话中调用会取消当前会话                |
+| `refresh()`            | 按当前选项重建,例如增删了子元素之后                                       |
+| `destroy()`            | 销毁,可重复调用;另有 `[Symbol.dispose]()`,`options.signal` 中止时同样销毁 |
+
+改变节点几何的 `Draggable`、`Rotatable`、`Resizable`、`Zoomable` 继承 `Shape`,另有 `state`(当前状态)与
+`assign(patch)`(写入 `matrix`、`size`;会话中不生效)。选项只放配置,状态只经 `assign` 写入,重建不会改变状态。
 
 | 能力                                     | 选项(另含 `bind` 的通用选项)                                                             |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -256,12 +272,14 @@ DOM 层的 Model 就是在 `Store` 之上加了折叠、测量与渲染。
 | `new Droppable(zone, options?)`          | `accept`、`detect`(默认 `within`)、`onEnter`、`onOver`、`onLeave`、`onDrop`              |
 | `new Sortable(list, options?)`           | `items`、`handle`、`ignore`(都是选择器)、`slot`(默认 `closest`)、`duration`、`onSort`    |
 
-- 能力都提供 `destroy()` 与 `[Symbol.dispose]()`;`Draggable`、`Rotatable`、`Resizable`、`Zoomable` 提供 `state`、`active`
-  与 `update`,前两者另有 `use`,`Draggable` 另有 `handle` 与 `ignore`;`Sortable` 提供 `items`、`move` 与 `refresh`
+- 事件按角色命名:会话 `onStart`、`onMove`、`onEnd`、`onCancel`;放置区 `onEnter`、`onOver`、`onLeave`、`onDrop`;排序提交 `onSort`
 - `Droppable` 的 `detect(zone, drag)` 返回分数或 `undefined`;命中多个时最内层优先,其次分数高者;`drag.point` 为指针,
   没有指针(键盘)时为被拖元素的中心
 - `Sortable` 的 `slot(point, boxes)` 在容器空间里返回插入位置;事件为 `{ item, from: { list, index }, to: { list, index } }`;
-  `move(item, index)` 程序化排序;`refresh()` 在增删条目后重新绑定
+  `items` 为当前条目,`move(item, index)` 程序化排序
+- 自定义能力继承 `Capability<N, O, U>`(或 `Shape<N, O>`),只实现 `build()`:返回本能力用到的单元 `U`(默认 `Unit`,
+  即有 `active` 与 `destroy()` 的对象,如 `Binding`)与清理函数,其余生命周期由基类负责;`Shape` 另接收节点的 `Store`。
+  基类属于模型层,不引用 DOM,`N` 为节点类型
 
 ### 默认键盘
 
@@ -300,13 +318,15 @@ DOM 层的 Model 就是在 `Store` 之上加了折叠、测量与渲染。
 ## 模块边界
 
 ```
-index.ts            - 公开 API:core、dom 显式列出,capabilities、plugins 整体转发
+index.ts            - 公开 API:model、core、dom 显式列出,capabilities、plugins 整体转发
+model/              - 模型:状态、存储与能力的基类约定,不引用 DOM
+├── capability.ts   - Capability、Shape:能力的基类与生命周期
+├── state.ts        - State、Patch、Range、Bounds、merge、corners、extent、center
+└── store.ts        - Store:共享状态、会话锁、成员之间同步
 core/               - 逻辑:不引用 DOM
 ├── action.ts       - Action、Freedom、transform、resize
 ├── frame.ts        - 屏幕 ↔ 容器空间
 ├── order.ts        - 排序:closest 选位置,arrange 给出移动计划
-├── state.ts        - State、Patch、Range、Bounds、merge、corners、extent、center
-├── store.ts        - Store:共享状态、会话锁、多个 Tracker 之间同步
 ├── tracker.ts      - Tracker:候选 → 插件 → 提交
 └── zone.ts         - 放置:按内外层与分数选出目标
 plugins/            - 约束:grid、bounds、limits、angle(不引用 DOM)
@@ -315,16 +335,17 @@ dom/                - 适配:只有这里读写 DOM
 ├── gridlines.ts    - 网格线插件
 ├── keyboard.ts     - 键盘
 ├── measure.ts      - 测量
-├── model.ts        - 在 Store 之上折叠、测量、渲染
 ├── router.ts       - 指针路由、句柄与排除区
 ├── style.ts        - 计算样式 → 矩阵(fold)
+├── view.ts         - View:在 Store 之上折叠、测量、渲染
 └── wheel.ts        - 滚轮
 capabilities/       - 组装:draggable、rotatable、resizable、zoomable、droppable、sortable
 examples/           - 示例(独立的 workspace 包),按框架分目录
 ```
 
 子目录各自由 `index.ts` 集中导出;跨目录一律从子目录的 `index.ts` 导入,同一目录内直接引用文件。
-根 `index.ts` 决定公开范围:内部函数(移动计划、目标选择、样式折叠、frame、模型、路由、键盘、滚轮、测量)不对外导出。
+根 `index.ts` 决定公开范围:内部函数(状态合并、移动计划、目标选择、样式折叠、frame、视图、路由、键盘、滚轮、测量)不对外导出。
+依赖只朝下:`model/` 不引用其他子目录,`core/` 只引用 `model/`,`plugins/` 与 `dom/` 引用 `core/`、`model/`,`capabilities/` 组装其余各层。
 
 ## 开发
 

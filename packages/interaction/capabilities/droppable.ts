@@ -1,7 +1,13 @@
 import { plane, type Point } from "@openconsole/matrix";
 
-import { center, choose, frame, type Candidate } from "../core";
+import { centroid, choose, frame, type Candidate } from "../core";
 import { linear, observe, own, rect, size, type Session } from "../dom";
+import {
+  Capability,
+  center,
+  type CapabilityOptions,
+  type Part,
+} from "../model";
 
 export interface Drag {
   readonly node: HTMLElement;
@@ -11,7 +17,7 @@ export interface Drag {
 
 export type Detect = (zone: HTMLElement, drag: Drag) => number | undefined;
 
-export interface DroppableOptions {
+export interface DroppableOptions extends CapabilityOptions {
   readonly accept?: (drag: Drag) => boolean;
   readonly detect?: Detect;
   readonly onEnter?: (drag: Drag) => void;
@@ -33,17 +39,10 @@ export function within(zone: HTMLElement, drag: Drag): number | undefined {
 
 const zones = new Map<HTMLElement, DroppableOptions>();
 let over: HTMLElement | undefined;
-let release: (() => void) | undefined;
 
 function locate(session: Session): Point<2> {
   const { points } = session.input;
-  if (points.length > 0) {
-    const sum = points.reduce(
-      (total, point) => ({ x: total.x + point.x, y: total.y + point.y }),
-      { x: 0, y: 0 },
-    );
-    return { x: sum.x / points.length, y: sum.y / points.length };
-  }
+  if (points.length > 0) return centroid(points);
   const inverse = plane.invert(session.frame);
   const middle = center(session.state);
   return inverse ? plane.apply(inverse, middle) : middle;
@@ -96,26 +95,26 @@ const observer = {
   onCancel: (session: Session) => finish(session, false),
 };
 
-export class Droppable {
-  readonly node: HTMLElement;
-
+export class Droppable extends Capability<HTMLElement, DroppableOptions> {
   constructor(zone: HTMLElement, options: DroppableOptions = {}) {
-    this.node = zone;
-    zones.set(zone, options);
-    release ??= observe(observer);
+    super(zone, options);
+    this.refresh();
   }
 
-  destroy(): this {
-    zones.delete(this.node);
-    if (over === this.node) over = undefined;
-    if (zones.size === 0) {
-      release?.();
-      release = undefined;
-    }
-    return this;
+  get active(): boolean {
+    return over === this.node;
   }
 
-  [Symbol.dispose](): void {
-    this.destroy();
+  protected build(): readonly Part[] {
+    const { node } = this;
+    zones.set(node, this.options);
+    const stop = observe(observer);
+    return [
+      () => {
+        zones.delete(node);
+        if (over === node) over = undefined;
+        if (zones.size === 0) stop();
+      },
+    ];
   }
 }

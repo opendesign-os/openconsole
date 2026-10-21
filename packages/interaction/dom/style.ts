@@ -1,6 +1,6 @@
 import { plane, space, type Matrix, type Point } from "@openconsole/matrix";
 
-import type { Size } from "../core";
+import type { Size } from "../model";
 
 export interface Computed {
   readonly origin: string;

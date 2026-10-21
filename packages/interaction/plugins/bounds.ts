@@ -1,15 +1,7 @@
 import { plane, type Point } from "@openconsole/matrix";
 
-import {
-  corners,
-  extent,
-  pin,
-  resizes,
-  type Bounds,
-  type Edges,
-  type Plugin,
-  type State,
-} from "../core";
+import { pin, resizes, type Edges, type Plugin } from "../core";
+import { corners, extent, type Bounds, type State } from "../model";
 
 const open: Bounds = {
   left: -Infinity,

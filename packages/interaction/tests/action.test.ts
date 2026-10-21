@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { plane, type Point } from "@openconsole/matrix";
 
-import { resize, transform, type Handle, type State } from "../core";
+import { resize, transform, type Handle } from "../core";
+import type { State } from "../model";
 
 const near = (actual: Point<2>, expected: Point<2>) => {
   expect(actual.x).toBeCloseTo(expected.x, 9);

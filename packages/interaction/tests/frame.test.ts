@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { plane } from "@openconsole/matrix";
 
-import { extent, frame, type State } from "../core";
+import { frame } from "../core";
+import { extent, type State } from "../model";
 
 describe("frame", () => {
   it("recovers the screen → container map from the rendered extent", () => {

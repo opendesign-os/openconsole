@@ -1,6 +1,7 @@
 import { plane, space, type Matrix, type Point } from "@openconsole/matrix";
 
-import { frame, Store, type Patch, type Size, type State } from "../core";
+import { frame } from "../core";
+import { Store, type Patch, type Size, type State } from "../model";
 import {
   computed,
   linear,
@@ -14,13 +15,13 @@ import { fold } from "./style";
 
 export type Render = (node: HTMLElement, state: State) => void;
 
-const models = new WeakMap<HTMLElement, Model>();
+const views = new WeakMap<HTMLElement, View>();
 
 const same = (left: Size, right: Size): boolean =>
   Math.abs(left.width - right.width) < 1e-6 &&
   Math.abs(left.height - right.height) < 1e-6;
 
-export class Model {
+export class View {
   readonly node: HTMLElement;
   readonly store: Store;
   render: Render | undefined;
@@ -33,18 +34,19 @@ export class Model {
   private constructor(node: HTMLElement) {
     this.node = node;
     this.#layout = size(node);
-    this.store = new Store({ matrix: plane.identity, size: this.#layout }, () =>
-      this.#paint(),
+    this.store = new Store(
+      { matrix: plane.identity, size: this.#layout },
+      (state, patch) => this.#change(state, patch),
     );
     this.prepare();
   }
 
-  static of(node: HTMLElement): Model {
-    const existing = models.get(node);
+  static of(node: HTMLElement): View {
+    const existing = views.get(node);
     if (existing) return existing;
-    const model = new Model(node);
-    models.set(node, model);
-    return model;
+    const view = new View(node);
+    views.set(node, view);
+    return view;
   }
 
   prepare(): void {
@@ -70,7 +72,7 @@ export class Model {
         matrix: this.#placed ? undefined : matrix,
         size: this.#sized ? undefined : measured,
       });
-      if (!changed) this.#paint();
+      if (!changed) this.#paint(store.state);
       return;
     }
     if (
@@ -94,24 +96,23 @@ export class Model {
 
   relayout(): void {
     this.#offset = offset(this.node);
-    this.#paint();
+    this.#paint(this.store.state);
   }
 
   frame(): Matrix<2, "affine"> | undefined {
     return frame(linear(this.node), rect(this.node), this.store.state);
   }
 
-  assign(patch: Patch): void {
+  #change(state: State, patch: Patch): void {
     if (!this.#ready) {
       this.#placed ||= Boolean(patch.matrix);
       this.#sized ||= Boolean(patch.size);
     }
-    this.store.commit(patch);
+    this.#paint(state);
   }
 
-  #paint(): void {
+  #paint(state: State): void {
     const { node, render } = this;
-    const { state } = this.store;
     if (render) {
       render(node, state);
       return;

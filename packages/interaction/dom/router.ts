@@ -42,8 +42,6 @@ const interactive =
   "input, textarea, select, button, option, [contenteditable]:not([contenteditable='false'])";
 
 const markers = new WeakMap<EventTarget, readonly Marker[]>();
-const documents = new WeakSet<Document>();
-const lookup: Lookup = (element) => markers.get(element);
 let session: Session | undefined;
 
 export const input = (
@@ -189,7 +187,7 @@ function down(event: PointerEvent): void {
     return;
   }
   const path = event.composedPath();
-  const found = pick(path, lookup);
+  const found = pick(path, (element) => markers.get(element));
   if (!found || !(found.handle instanceof Element)) return;
   const handle = found.handle;
   if (blocked(path, handle)) return;
@@ -279,14 +277,10 @@ function hold(event: TouchEvent): void {
 
 export function register(element: Element, marker: Marker): () => void {
   markers.set(element, [...(markers.get(element) ?? []), marker]);
-  const document = element.ownerDocument;
-  if (!documents.has(document)) {
-    documents.add(document);
-    document.addEventListener("pointerdown", down, {
-      capture: true,
-      passive: true,
-    });
-  }
+  element.ownerDocument.addEventListener("pointerdown", down, {
+    capture: true,
+    passive: true,
+  });
   const style =
     marker.kind === "handle" &&
     (element instanceof HTMLElement || element instanceof SVGElement)

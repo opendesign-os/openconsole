@@ -1,4 +1,7 @@
-import type { Input, State, Step } from "../core";
+import { plane } from "@openconsole/matrix";
+
+import type { Input, Step } from "../core";
+import type { State } from "../model";
 import { input } from "./router";
 
 export type Key = Step | ((state: State) => Step | undefined);
@@ -14,8 +17,24 @@ export interface Grab {
   cancel(): void;
 }
 
+export function arrows(unit: number): Keys {
+  const move = (x: number, y: number): Step => ({
+    matrix: plane.translate(x * unit, y * unit),
+    space: "container",
+  });
+  return {
+    ArrowLeft: move(-1, 0),
+    ArrowRight: move(1, 0),
+    ArrowUp: move(0, -1),
+    ArrowDown: move(0, 1),
+    "Shift+ArrowLeft": move(-10, 0),
+    "Shift+ArrowRight": move(10, 0),
+    "Shift+ArrowUp": move(0, -10),
+    "Shift+ArrowDown": move(0, 10),
+  };
+}
+
 const targets = new WeakMap<Element, Grab>();
-const documents = new WeakSet<Document>();
 let active: { readonly element: Element; readonly target: Grab } | undefined;
 
 const grabs = (key: string): boolean => key === " " || key === "Enter";
@@ -61,11 +80,7 @@ function down(event: KeyboardEvent): void {
 
 export function listen(element: Element, target: Grab): () => void {
   targets.set(element, target);
-  const document = element.ownerDocument;
-  if (!documents.has(document)) {
-    documents.add(document);
-    document.addEventListener("keydown", down);
-  }
+  element.ownerDocument.addEventListener("keydown", down);
   const focus =
     element instanceof HTMLElement &&
     !element.hasAttribute("tabindex") &&

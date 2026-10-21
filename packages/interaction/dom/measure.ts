@@ -1,6 +1,6 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import type { Bounds, Range, Size } from "../core";
+import type { Bounds, Range, Size } from "../model";
 import { local, type Computed } from "./style";
 
 type Axis = "width" | "height";
@@ -31,6 +31,13 @@ export function rect(node: Element): Bounds {
   const { left, top, right, bottom } = node.getBoundingClientRect();
   return { left, top, right, bottom };
 }
+
+export const area = (container: HTMLElement) => (): Bounds => ({
+  left: 0,
+  top: 0,
+  right: container.clientWidth,
+  bottom: container.clientHeight,
+});
 
 export const box = (node: HTMLElement): Bounds => ({
   left: node.offsetLeft,

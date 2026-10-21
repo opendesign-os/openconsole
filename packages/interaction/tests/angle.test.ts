@@ -10,10 +10,9 @@ const quarter = Math.PI / 12;
 describe("angle", () => {
   it("snaps the rotation to multiples of the step around the pivot", () => {
     const tracker = new Tracker({
-      size: { width: 100, height: 100 },
       action: transform({ rotate: true }),
       plugins: [angle(quarter)],
-    });
+    }).assign({ size: { width: 100, height: 100 } });
     const turn = 0.3;
     tracker.start({ points: [{ x: 150, y: 50 }] });
     tracker.move({

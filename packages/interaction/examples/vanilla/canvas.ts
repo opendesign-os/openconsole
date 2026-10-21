@@ -19,18 +19,15 @@ const zoom = new Zoomable(world, {
 });
 
 [...world.querySelectorAll<HTMLElement>(".card")].forEach((card, index) => {
-  const drag = new Draggable(card, {
+  new Draggable(card, {
     container: world,
-    matrix: plane.translate(120 + index * 220, 120 + index * 90),
     grid: 24,
     lines: false,
-  });
-  const title = card.querySelector(".title");
-  const pin = card.querySelector(".pin");
-  if (title) drag.handle(title);
-  if (pin) drag.ignore(pin);
+    handle: card.querySelector(".title") ?? card,
+    ignore: [...card.querySelectorAll(".pin")],
+  }).assign({ matrix: plane.translate(120 + index * 220, 120 + index * 90) });
 });
 
 reset.addEventListener("click", () => {
-  zoom.update({ matrix: plane.identity });
+  zoom.assign({ matrix: plane.identity });
 });

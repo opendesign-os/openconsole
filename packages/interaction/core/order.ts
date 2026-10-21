@@ -1,6 +1,6 @@
 import type { Point } from "@openconsole/matrix";
 
-import type { Bounds } from "./state";
+import type { Bounds } from "../model";
 
 export type Slot = (point: Point<2>, boxes: readonly Bounds[]) => number;
 
