@@ -1,6 +1,15 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import { center, centroid, merge, type Patch, type State } from "../model";
+import {
+  center,
+  centroid,
+  delta,
+  epsilon,
+  merge,
+  type Operation,
+  type Patch,
+  type State,
+} from "../model";
 import { anchor, pin, resizes, transform, type Action } from "./action";
 
 export interface Modifiers {
@@ -40,6 +49,7 @@ export interface Plugin {
   onEnd?(context: Context): void;
   onCancel?(context: Context): void;
   onChange?(context: Pick<Context, "state">): void;
+  onCommit?(operation: Operation): void;
   onDetach?(): void;
   animating?(): boolean;
 }
@@ -66,6 +76,11 @@ const initial: State = {
   matrix: plane.identity,
   size: { width: 0, height: 0 },
 };
+
+const changed = ({ matrix, size }: Operation): boolean =>
+  !plane.equals(matrix, plane.identity, epsilon) ||
+  Math.abs(size.width) > epsilon ||
+  Math.abs(size.height) > epsilon;
 
 export function hotspot({
   state,
@@ -217,8 +232,12 @@ export class Tracker {
     if (!session) return this;
     if (input) session.input = input;
     this.#session = undefined;
+    const operation = delta(session.origin, this.#state);
     const context = this.#context(session, this.#state);
     for (const plugin of this.#plugins) plugin.onEnd?.(context);
+    if (operation && changed(operation)) {
+      for (const plugin of this.#plugins) plugin.onCommit?.(operation);
+    }
     this.#flush();
     return this;
   }

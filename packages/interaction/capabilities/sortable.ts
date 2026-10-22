@@ -43,7 +43,7 @@ export interface Sort {
 
 export interface ListOptions
   extends
-    Omit<BindOptions, "action" | "handle" | "ignore" | "keys">,
+    Omit<BindOptions, "action" | "handle" | "ignore" | "keys" | "onCommit">,
     CapabilityOptions {
   readonly items?: string;
   readonly handle?: string;

@@ -8,6 +8,7 @@
   建立在 `bind` 与 `observe` 之上
 - **开箱即用**:不传手柄时自动生成调整尺寸与旋转的手柄;磁吸、碰撞一个开关即可;拖进或拖出容器只需一个选择器
 - **统一状态**:`State { matrix, size, index? }`,所有能力、所有插件读写同一种状态
+- **元操作**:一次会话的净变化是一个 `Operation`,撤销、重做、回放与协作用同一份数据
 - **统一输入**:指针(最多两指)、键盘、滚轮都是可替换的输入源(`Sensor`),与程序调用一起换算成同一种输入,经矩阵引擎进入容器空间
 - **精确跟手**:祖先带旋转、斜切、非等比缩放时,拖拽、旋转、双指与调整尺寸仍贴着指针
 - **磁吸与碰撞**:贴边、居中与等间距吸附并显示参考线;碰撞做扫掠检测,快速拖动也不会穿过,撞上后沿障碍物滑动,
@@ -201,6 +202,41 @@ interface Action {
 - 缩放只允许等比;非等比的变化由 `size` 表达
 - 插件链之后,调整尺寸按最终尺寸重新钉住对边,插件改不坏动作
 
+## 元操作
+
+一次会话对状态的净变化是一个 `Operation`:矩阵为容器空间里的净变换,尺寸为宽高增量。会话结束且状态确有变化时,
+插件的 `onCommit(operation)` 与绑定的 `onCommit` 选项各收到一次;单纯点击不发出。
+
+```ts
+interface Operation {
+  readonly matrix: Matrix<2, "affine">; // to.matrix = matrix·from.matrix
+  readonly size: Size; // to.size = from.size + size
+}
+
+delta(from, to); // 两个状态之间的净变化
+perform(operation, state); // 施加到状态上
+revert(operation, state); // 从状态上撤回,矩阵不可逆时为 undefined
+```
+
+撤销与重做直接用它:
+
+```ts
+import { Draggable, revert, type Operation } from "@openconsole/interaction";
+
+const history: Operation[] = [];
+const drag = new Draggable(card, { onCommit: (operation) => history.push(operation) });
+
+const operation = history.pop();
+const state = operation && revert(operation, drag.state);
+if (state) drag.assign(state);
+```
+
+- **增量**:撤回作用在当前状态上,中间夹着别的变化时仍然成立;矩阵相乘不可交换,多条元操作按发生顺序施加
+- **两层管道**:会话内各段(手指数变化、键盘或滚轮的 `Step`)按矩阵连乘,每帧从段起点重新求解;会话结束时收成一个
+  `Operation`。逐事件的增量不对外暴露,它们受非线性约束影响,不能直接累乘
+- **只描述几何**:排序、磁贴与编辑器的结果是结构变化,由 `onSort`、`onLayout` 报告,这几项能力不提供 `onCommit`;
+  `nest` 与 `transfer` 的跨容器移交也不在其中
+
 ## 插件
 
 ```ts
@@ -212,6 +248,7 @@ interface Plugin {
   onCancel?(context: Context): void;
   onChange?(context: { state }): void; // 每次提交后一次:移动、nudge、帧、assign、cancel
   // onCancel 被调用时状态已回到起点,插件可以在此基础上再写入
+  onCommit?(operation: Operation): void; // 会话改变了状态时,在 onEnd 之后调用一次
   onDetach?(): void;
   animating?(): boolean; // 返回 true 时继续出帧
 }
@@ -304,23 +341,23 @@ const binding = bind(node, {
 const stop = observe({ onMove: ({ node, state, input, data }) => {} }); // 旁观所有会话
 ```
 
-| `bind` 选项                              | 说明                                                       |
-| ---------------------------------------- | ---------------------------------------------------------- |
-| `action`                                 | 动作                                                       |
-| `sensors`                                | 输入源,默认 `[pointer(), keyboard()]`                      |
-| `handle`                                 | 句柄,默认为节点本身;命中元素与变换元素可以不同             |
-| `ignore`                                 | 排除区                                                     |
-| `plugins`                                | 插件                                                       |
-| `activation`                             | 起动条件:`distance`,或 `delay` + `tolerance`;可按指针类型  |
-| `priority`                               | 句柄与排除区的默认优先级,也决定同一元素上多个绑定的先后    |
-| `keys`                                   | 键盘映射:键名或 `Shift+键名` → `Step` 或返回 `Step` 的函数 |
-| `render`                                 | 替换默认的 CSS 写入                                        |
-| `data`                                   | 交给旁观者的载荷,放置时可读                                |
-| `onStart`、`onMove`、`onEnd`、`onCancel` | 会话回调                                                   |
+| `bind` 选项                                          | 说明                                                       |
+| ---------------------------------------------------- | ---------------------------------------------------------- |
+| `action`                                             | 动作                                                       |
+| `sensors`                                            | 输入源,默认 `[pointer(), keyboard()]`                      |
+| `handle`                                             | 句柄,默认为节点本身;命中元素与变换元素可以不同             |
+| `ignore`                                             | 排除区                                                     |
+| `plugins`                                            | 插件                                                       |
+| `activation`                                         | 起动条件:`distance`,或 `delay` + `tolerance`;可按指针类型  |
+| `priority`                                           | 句柄与排除区的默认优先级,也决定同一元素上多个绑定的先后    |
+| `keys`                                               | 键盘映射:键名或 `Shift+键名` → `Step` 或返回 `Step` 的函数 |
+| `render`                                             | 替换默认的 CSS 写入                                        |
+| `data`                                               | 交给旁观者的载荷,放置时可读                                |
+| `onStart`、`onMove`、`onEnd`、`onCancel`、`onCommit` | 会话回调,总是调用最新传入的那一个                          |
 
 `Binding` 提供 `options`、`state`、`active`、`start(input)`、`move(input)`、`nudge(step)`、`end(input?)`、`cancel()`、
 `refresh()`、`update(options)`、`assign(patch)`、`handle(element, options?)`、`ignore(element, options?)`、`destroy()`
-与 `[Symbol.dispose]()`。`update` 只写传入的选项并就地应用:插件与动作在会话结束后替换,句柄、输入源按需重新挂载,
+与 `[Symbol.dispose]()`。`update` 只写传入的选项并就地应用:插件与动作在会话结束后替换,回调立即生效,句柄、输入源按需重新挂载,
 不打断进行中的拖拽。`handle`、`ignore` 选项也接受选择器,在节点内查找。
 
 ### 输入源
@@ -443,7 +480,7 @@ canvas.addEventListener("pointerup", () => tracker.end());
 | `new Tileable(grid, options?)`           | `columns`、`rowHeight`、`gap`、`rows`、`compact`、`collision`、`sizing`、`tile`、`handles`、`items`、`duration`、`onLayout` |
 | `new Nestable(root, options?)`           | `zones`、`items`、`handle`、`ignore`、`sources`、`create`、`duration`、`onSort`                                             |
 
-- 事件按角色命名:会话 `onStart`、`onMove`、`onEnd`、`onCancel`;放置区 `onEnter`、`onOver`、`onLeave`、`onDrop`;排序提交 `onSort`
+- 事件按角色命名:会话 `onStart`、`onMove`、`onEnd`、`onCancel`,净变化 `onCommit`;放置区 `onEnter`、`onOver`、`onLeave`、`onDrop`;排序提交 `onSort`
 - `magnet`、`collide` 为 `true` 时以父元素与兄弟元素为目标,为字符串时是 `container` 里的选择器;每次会话开始时取一次目标,
   自身与后代自动排除;`nest` 是可放入的容器选择器,松手时指针下最内层的匹配容器(不在其中时为 `container`)接收节点
 - `Tileable` 的 `layout` 为当前布局,`move(item, tile)` 程序化移动;固定磁贴(`fixed`)不可拖动也不会被推开;`rows` 限制
@@ -460,7 +497,8 @@ canvas.addEventListener("pointerup", () => tracker.end());
   `Index`(`insert`、`search`、`clear`)接入 R 树等:`Droppable.index = new Hash(128)`
 - 内置判定:`within`(指针落在区域内,默认)、`overlap`(交集面积除以并集面积,同 dnd-kit 的 `rectIntersection`)、
   `nearest`(相交区域里中心距离越近分数越高)
-- `Sortable`、`Tileable`、`Nestable` 共用 `ListOptions`:`items`、`handle`、`ignore` 为选择器,`duration` 为过渡时长(默认 150ms)
+- `Sortable`、`Tileable`、`Nestable` 共用 `ListOptions`:`items`、`handle`、`ignore` 为选择器,`duration` 为过渡时长(默认 150ms);
+  结果是结构变化,不提供 `onCommit`
 - `Sortable` 的 `slot(point, boxes)` 在容器空间里返回插入位置;事件为 `{ item, from: { list, index }, to: { list, index } }`;
   `items` 为当前条目,`move(item, index)` 程序化排序
 - 自定义能力继承 `Capability<N, O, U>`(或 `Shape<N, O, U>`),实现 `build()`:返回本能力用到的单元 `U`(默认 `Unit`,
@@ -525,6 +563,7 @@ index.ts            - 公开 API:model、core、dom 显式列出,capabilities、
 model/              - 模型:状态、存储与能力的基类约定,不引用 DOM
 ├── capability.ts   - Capability、Shape:能力的基类与生命周期
 ├── geometry.ts     - Span、Range、Bounds、Polygon、Guide 与 extent、centroid、area、scale、contains、intersect
+├── operation.ts    - 元操作:Operation 与 delta、perform、revert
 ├── state.ts        - State、Patch 与 merge、corners、center
 └── store.ts        - Store:共享状态、会话锁、成员之间同步
 core/               - 逻辑:不引用 DOM

@@ -8,7 +8,7 @@ import {
   type Plugin,
   type Step,
 } from "../core";
-import type { Patch, State } from "../model";
+import type { Operation, Patch, State } from "../model";
 import { hold } from "./flip";
 import { keyboard } from "./keyboard";
 import { pointer } from "./pointer";
@@ -48,6 +48,7 @@ export interface BindOptions {
   readonly onMove?: (context: Context) => void;
   readonly onEnd?: (context: Context) => void;
   readonly onCancel?: (context: Context) => void;
+  readonly onCommit?: (operation: Operation) => void;
 }
 
 interface Entry {
@@ -77,24 +78,22 @@ function resolve(
   return value instanceof Element ? [value] : (value ?? []);
 }
 
-function callbacks(options: BindOptions): Plugin {
-  const { onStart, onMove, onEnd, onCancel } = options;
-  return {
-    ...(onStart ? { onStart } : {}),
-    ...(onMove ? { onMove } : {}),
-    ...(onEnd ? { onEnd } : {}),
-    ...(onCancel ? { onCancel } : {}),
-  };
-}
-
 export class Binding implements Control {
   readonly node: HTMLElement;
   readonly #view: View;
   readonly #tracker: Tracker;
   readonly #handles = new Map<Element, Entry>();
   readonly #ignores = new Map<Element, Entry>();
+  readonly #hooks: Plugin = {
+    onStart: (context) => this.#options.onStart?.(context),
+    onMove: (context) => {
+      this.#options.onMove?.(context);
+    },
+    onEnd: (context) => this.#options.onEnd?.(context),
+    onCancel: (context) => this.#options.onCancel?.(context),
+    onCommit: (operation) => this.#options.onCommit?.(operation),
+  };
   #options: BindOptions;
-  #callbacks: Plugin;
   #fallback: Entry | undefined;
   #declared: (() => void)[] = [];
   #alive = true;
@@ -106,11 +105,10 @@ export class Binding implements Control {
   constructor(node: HTMLElement, options: BindOptions) {
     this.node = node;
     this.#options = options;
-    this.#callbacks = callbacks(options);
     this.#view = View.of(node);
     this.#tracker = new Tracker({
       action: options.action,
-      plugins: [...(options.plugins ?? []), this.#callbacks],
+      plugins: [...(options.plugins ?? []), this.#hooks],
     });
     if (options.render) this.#view.render = options.render;
     this.#view.store.join(this.#tracker);
@@ -230,13 +228,10 @@ export class Binding implements Control {
     const changed = (...keys: (keyof BindOptions)[]) =>
       keys.some((key) => key in options && options[key] !== previous[key]);
     if (changed("render")) this.#view.render = this.#options.render;
-    if (
-      changed("action", "plugins", "onStart", "onMove", "onEnd", "onCancel")
-    ) {
-      this.#callbacks = callbacks(this.#options);
+    if (changed("action", "plugins")) {
       this.#tracker.update({
         action: this.#options.action,
-        plugins: [...(this.#options.plugins ?? []), this.#callbacks],
+        plugins: [...(this.#options.plugins ?? []), this.#hooks],
       });
     }
     if (
