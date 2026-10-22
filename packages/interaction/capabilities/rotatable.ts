@@ -7,7 +7,6 @@ import {
   View,
   type Binding,
   type BindOptions,
-  type Elements,
   type Keys,
 } from "../dom";
 import { Shape, type CapabilityOptions, type Part, type State } from "../model";
@@ -37,29 +36,36 @@ function turns(pivot: Point<2> | undefined, unit: number): Keys {
   };
 }
 
-export class Rotatable extends Shape<HTMLElement, RotatableOptions> {
+export class Rotatable extends Shape<HTMLElement, RotatableOptions, Binding> {
   constructor(node: HTMLElement, options: RotatableOptions = {}) {
     super(node, View.of(node).store, options);
     this.refresh();
   }
 
-  protected build(): readonly Part[] {
-    const { handle } = this.options;
-    if (handle) return [this.#bind(handle)];
+  protected build(): readonly Part<Binding>[] {
+    if (this.options.handle) return [bind(this.node, this.#config())];
     const grip = knob(this.node);
-    return [this.#bind(grip), () => grip.remove()];
+    return [
+      bind(this.node, { ...this.#config(), handle: grip }),
+      () => grip.remove(),
+    ];
   }
 
-  #bind(handle: Elements): Binding {
+  protected apply(changes: Partial<RotatableOptions>): boolean {
+    if ("handle" in changes) return false;
+    for (const binding of this.units) binding.update(this.#config());
+    return true;
+  }
+
+  #config(): BindOptions {
     const { pivot, step, plugins = [], keys } = this.options;
-    return bind(this.node, {
+    return {
       ...this.options,
-      handle,
       action: transform({ rotate: true, ...(pivot ? { pivot } : {}) }),
       plugins: [step ? angle(step) : undefined, ...plugins].filter(
         (plugin) => plugin !== undefined,
       ),
       keys: keys ?? turns(pivot, step ?? Math.PI / 180),
-    });
+    };
   }
 }

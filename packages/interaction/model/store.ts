@@ -6,16 +6,16 @@ export interface Member {
 
 export class Store {
   #state: State;
-  #active: Member | undefined;
+  #holder: Member | undefined;
   readonly #members = new Set<Member>();
-  readonly #listen: (state: State, patch: Patch) => void;
+  readonly #listener: (state: State, patch: Patch) => void;
 
   constructor(
     state: State,
-    listen: (state: State, patch: Patch) => void = () => undefined,
+    listener: (state: State, patch: Patch) => void = () => undefined,
   ) {
     this.#state = state;
-    this.#listen = listen;
+    this.#listener = listener;
   }
 
   get state(): State {
@@ -23,7 +23,7 @@ export class Store {
   }
 
   get locked(): boolean {
-    return this.#active !== undefined;
+    return this.#holder !== undefined;
   }
 
   join(member: Member): void {
@@ -37,13 +37,13 @@ export class Store {
   }
 
   lock(member: Member): boolean {
-    if (this.#active && this.#active !== member) return false;
-    this.#active = member;
+    if (this.#holder && this.#holder !== member) return false;
+    this.#holder = member;
     return true;
   }
 
   unlock(member: Member): void {
-    if (this.#active === member) this.#active = undefined;
+    if (this.#holder === member) this.#holder = undefined;
   }
 
   commit(patch: Patch, source?: Member): boolean {
@@ -53,7 +53,7 @@ export class Store {
     for (const member of this.#members) {
       if (member !== source) member.assign(state);
     }
-    this.#listen(state, patch);
+    this.#listener(state, patch);
     return true;
   }
 

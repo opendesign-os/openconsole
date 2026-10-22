@@ -1,5 +1,5 @@
 import { hotspot, type Plugin } from "../core";
-import { probe } from "./measure";
+import { probe } from "./targets";
 import { transfer } from "./view";
 
 export function nest(

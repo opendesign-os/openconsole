@@ -1,8 +1,7 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import { choose, frame, type Context } from "../core";
+import { frame } from "../core";
 import {
-  contains,
   corners,
   type Bounds,
   type Polygon,
@@ -117,24 +116,6 @@ export function outline(node: HTMLElement): Polygon | undefined {
   return matrix && corners({ matrix, size: box });
 }
 
-export function probe(
-  elements: Iterable<Element>,
-  node: HTMLElement,
-): (point: Point<2>) => HTMLElement | undefined {
-  const areas = [...elements].flatMap((target) => {
-    if (!(target instanceof HTMLElement) || node.contains(target)) return [];
-    const polygon = outline(target);
-    return polygon ? [{ target, polygon }] : [];
-  });
-  return (point) =>
-    choose(
-      areas.flatMap(({ target, polygon }) =>
-        contains(polygon, point) ? [{ target, score: 0 }] : [],
-      ),
-      (outer, inner) => outer.contains(inner),
-    );
-}
-
 export function inward(node: HTMLElement): Matrix<2, "affine"> | undefined {
   const matrix = pose(node, size(node));
   const shift = plane.translate(
@@ -157,40 +138,6 @@ export function client(node: HTMLElement): Polygon | undefined {
     })
   );
 }
-
-export const layered = (element: Element): boolean =>
-  element instanceof HTMLElement && element.dataset["layer"] !== undefined;
-
-export const query = (
-  root: ParentNode,
-  selector = ":scope > *",
-): HTMLElement[] =>
-  [...root.querySelectorAll(selector)].flatMap((element) =>
-    element instanceof HTMLElement && !layered(element) ? [element] : [],
-  );
-
-function targets(
-  node: HTMLElement,
-  value: true | string,
-  root: ParentNode,
-): Element[] {
-  if (typeof value === "string") return [...root.querySelectorAll(value)];
-  const parent = node.parentElement;
-  if (!parent) return [];
-  return [parent, ...[...parent.children].filter((child) => !layered(child))];
-}
-
-export const outlines =
-  (node: HTMLElement, value: true | string, root: ParentNode) =>
-  (context: Pick<Context, "frame">): Polygon[] =>
-    targets(node, value, root).flatMap((element) => {
-      if (node.contains(element) || !(element instanceof HTMLElement)) {
-        return [];
-      }
-      const polygon = outline(element);
-      if (!polygon) return [];
-      return [polygon.map((point) => plane.apply(context.frame, point))];
-    });
 
 export function range(node: HTMLElement, axis: Axis): Range {
   const style = getComputedStyle(node);

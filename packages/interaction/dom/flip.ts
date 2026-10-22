@@ -1,6 +1,5 @@
 import { plane } from "@openconsole/matrix";
 
-import type { Plugin } from "../core";
 import { linear } from "./measure";
 import { reset, View } from "./view";
 
@@ -66,47 +65,4 @@ export function restore(node: HTMLElement, duration?: number): void {
   const rects = record([node]);
   reset(node);
   play(rects, duration);
-}
-
-function raise(element: HTMLElement, root?: Element): () => void {
-  const layers = [element];
-  if (root?.contains(element)) {
-    for (
-      let parent = element.parentElement;
-      parent && parent !== root;
-      parent = parent.parentElement
-    ) {
-      if (getComputedStyle(parent).position !== "static") layers.push(parent);
-    }
-  }
-  const saved = layers.map((layer) => ({
-    layer,
-    position: layer.style.position,
-    zIndex: layer.style.zIndex,
-  }));
-  if (getComputedStyle(element).position === "static") {
-    element.style.position = "relative";
-  }
-  for (const layer of layers) layer.style.zIndex = "1";
-  return () => {
-    for (const { layer, position, zIndex } of saved) {
-      layer.style.position = position;
-      layer.style.zIndex = zIndex;
-    }
-  };
-}
-
-export function lift(node: HTMLElement, root?: Element): Plugin {
-  let lower: (() => void) | undefined;
-  const drop = () => {
-    lower?.();
-    lower = undefined;
-  };
-  return {
-    onStart: () => {
-      lower = raise(node, root);
-    },
-    onEnd: drop,
-    onCancel: drop,
-  };
 }

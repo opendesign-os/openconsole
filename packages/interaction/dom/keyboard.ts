@@ -1,21 +1,7 @@
 import { plane } from "@openconsole/matrix";
 
 import type { Input, Step } from "../core";
-import type { State } from "../model";
-import { input } from "./router";
-
-export type Key = Step | ((state: State) => Step | undefined);
-
-export type Keys = Readonly<Record<string, Key>>;
-
-export interface Grab {
-  readonly keys: Keys;
-  state(): State;
-  start(input: Input): boolean;
-  nudge(step: Step): void;
-  end(input: Input): void;
-  cancel(): void;
-}
+import { input, type Control, type Keys, type Sensor } from "./sensor";
 
 export function arrows(x: number, y = x): Keys {
   const move = (right: number, down: number): Step => ({
@@ -34,8 +20,10 @@ export function arrows(x: number, y = x): Keys {
   };
 }
 
-const targets = new WeakMap<Element, Grab>();
-let active: { readonly element: Element; readonly target: Grab } | undefined;
+const controls = new WeakMap<Element, Control>();
+let active:
+  | { readonly element: Element; readonly control: Control }
+  | undefined;
 
 const grabs = (key: string): boolean => key === " " || key === "Enter";
 
@@ -48,38 +36,38 @@ function stop(kind: "end" | "cancel", last: Input): void {
   if (!current) return;
   active = undefined;
   current.element.removeEventListener("blur", blur);
-  if (kind === "end") current.target.end(last);
-  else current.target.cancel();
+  if (kind === "end") current.control.end(last);
+  else current.control.cancel();
 }
 
 function down(event: KeyboardEvent): void {
   if (event.defaultPrevented) return;
   if (active) {
-    const { target } = active;
+    const { control } = active;
     if (event.key === "Escape" || grabs(event.key)) {
       event.preventDefault();
       stop(event.key === "Escape" ? "cancel" : "end", input(event));
       return;
     }
     const name = event.shiftKey ? `Shift+${event.key}` : event.key;
-    const key = target.keys[name] ?? target.keys[event.key];
+    const key = control.keys[name] ?? control.keys[event.key];
     if (!key) return;
     event.preventDefault();
-    const step = typeof key === "function" ? key(target.state()) : key;
-    if (step) target.nudge(step);
+    const step = typeof key === "function" ? key(control.state) : key;
+    if (step) control.nudge(step);
     return;
   }
   if (!grabs(event.key) || !(event.target instanceof Element)) return;
   const element = event.target;
-  const target = targets.get(element);
-  if (!target || !target.start(input(event))) return;
+  const control = controls.get(element);
+  if (!control || !control.start(input(event))) return;
   event.preventDefault();
-  active = { element, target };
+  active = { element, control };
   element.addEventListener("blur", blur, { once: true });
 }
 
-export function listen(element: Element, target: Grab): () => void {
-  targets.set(element, target);
+function listen(element: Element, control: Control): () => void {
+  controls.set(element, control);
   element.ownerDocument.addEventListener("keydown", down);
   const focus =
     element instanceof HTMLElement &&
@@ -87,8 +75,15 @@ export function listen(element: Element, target: Grab): () => void {
     element.tabIndex < 0;
   if (focus) element.tabIndex = 0;
   return () => {
-    if (targets.get(element) === target) targets.delete(element);
+    if (controls.get(element) === control) controls.delete(element);
     if (focus) element.removeAttribute("tabindex");
-    if (active?.target === target) stop("cancel", { points: [] });
+    if (active?.control === control) stop("cancel", { points: [] });
   };
 }
+
+export const keyboard =
+  (): Sensor =>
+  (control, { element, kind }) =>
+    kind === "handle" && Object.keys(control.keys).length > 0
+      ? listen(element, control)
+      : undefined;

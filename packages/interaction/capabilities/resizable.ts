@@ -30,13 +30,13 @@ function narrow(outer: Range = {}, inner: Range): Range {
   return { min, ...(Number.isFinite(max) ? { max } : {}) };
 }
 
-export class Resizable extends Shape<HTMLElement, ResizableOptions> {
+export class Resizable extends Shape<HTMLElement, ResizableOptions, Binding> {
   constructor(node: HTMLElement, options: ResizableOptions = {}) {
     super(node, View.of(node).store, options);
     this.refresh();
   }
 
-  protected build(): readonly Part[] {
+  protected build(): readonly Part<Binding>[] {
     const { handles } = this.options;
     if (handles) return this.#bind(handles);
     const created = grips(this.node);
@@ -48,33 +48,45 @@ export class Resizable extends Shape<HTMLElement, ResizableOptions> {
     ];
   }
 
+  protected apply(changes: Partial<ResizableOptions>): boolean {
+    if ("handles" in changes || "symmetric" in changes) return false;
+    for (const binding of this.units) binding.update(this.#config());
+    return true;
+  }
+
   #bind(handles: ReadonlyMap<Element, Handle>): Binding[] {
-    const { node, options } = this;
-    const { symmetric = false, container, plugins = [] } = options;
-    const scope = container ?? node.ownerDocument;
-    const limit = limits({
-      width: narrow(options.width, range(node, "width")),
-      height: narrow(options.height, range(node, "height")),
-    });
+    const { symmetric = false } = this.options;
     return [...handles].map(([handle, side]) =>
-      bind(node, {
-        ...options,
+      bind(this.node, {
+        ...this.#config(),
         handle,
         action: resize({ handle: side, symmetric }),
-        plugins: [
-          options.magnet
-            ? magnet(outlines(node, options.magnet, scope), {
-                onSnap: guides(() => node.offsetParent),
-              })
-            : undefined,
-          ...plugins,
-          container && bounds(region(container, node)),
-          limit,
-          options.collide
-            ? collide(outlines(node, options.collide, scope))
-            : undefined,
-        ].filter((plugin) => plugin !== undefined),
       }),
     );
+  }
+
+  #config(): Omit<BindOptions, "action"> {
+    const { node, options } = this;
+    const { container, plugins = [] } = options;
+    const scope = container ?? node.ownerDocument;
+    return {
+      ...options,
+      plugins: [
+        options.magnet
+          ? magnet(outlines(node, options.magnet, scope), {
+              onSnap: guides(() => node.offsetParent),
+            })
+          : undefined,
+        ...plugins,
+        container && bounds(region(container, node)),
+        limits({
+          width: narrow(options.width, range(node, "width")),
+          height: narrow(options.height, range(node, "height")),
+        }),
+        options.collide
+          ? collide(outlines(node, options.collide, scope))
+          : undefined,
+      ].filter((plugin) => plugin !== undefined),
+    };
   }
 }

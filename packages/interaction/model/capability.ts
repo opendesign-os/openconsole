@@ -39,8 +39,9 @@ export abstract class Capability<
   }
 
   update(options: Partial<O>): this {
+    if (this.#lifetime.signal.aborted) return this;
     this.options = { ...this.options, ...options };
-    return this.refresh();
+    return this.apply(options) ? this : this.refresh();
   }
 
   refresh(): this {
@@ -68,6 +69,10 @@ export abstract class Capability<
 
   protected abstract build(): readonly Part<U>[];
 
+  protected apply(changes: Partial<O>): boolean {
+    return Object.keys(changes).length === 0;
+  }
+
   #release(): void {
     for (const unit of this.#units) unit.destroy();
     for (const cleanup of this.#cleanups) cleanup();
@@ -76,10 +81,11 @@ export abstract class Capability<
   }
 }
 
-export abstract class Shape<N, O extends CapabilityOptions> extends Capability<
+export abstract class Shape<
   N,
-  O
-> {
+  O extends CapabilityOptions,
+  U extends Unit = Unit,
+> extends Capability<N, O, U> {
   readonly #store: Store;
 
   constructor(node: N, store: Store, options: O) {

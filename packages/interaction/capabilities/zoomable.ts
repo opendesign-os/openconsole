@@ -1,31 +1,49 @@
 import { plane } from "@openconsole/matrix";
 
 import { transform, type Step } from "../core";
-import { arrows, bind, View, wheel, type BindOptions } from "../dom";
+import {
+  arrows,
+  bind,
+  keyboard,
+  pointer,
+  View,
+  wheel,
+  type Binding,
+  type BindOptions,
+  type Sensor,
+} from "../dom";
 import { Shape, type CapabilityOptions, type Part, type Range } from "../model";
 import { limits } from "../plugins";
 
 export interface ZoomableOptions
   extends Omit<BindOptions, "action" | "handle">, CapabilityOptions {
   readonly viewport: HTMLElement;
-  readonly wheel?: boolean;
   readonly rotate?: boolean;
   readonly scale?: Range;
-  readonly speed?: number;
 }
 
-export class Zoomable extends Shape<HTMLElement, ZoomableOptions> {
+const sensors: readonly Sensor[] = [pointer(), keyboard(), wheel()];
+
+export class Zoomable extends Shape<HTMLElement, ZoomableOptions, Binding> {
   constructor(world: HTMLElement, options: ZoomableOptions) {
     super(world, View.of(world).store, options);
     this.refresh();
   }
 
-  protected build(): readonly Part[] {
+  protected build(): readonly Part<Binding>[] {
+    return [bind(this.node, this.#config())];
+  }
+
+  protected apply(): boolean {
+    for (const binding of this.units) binding.update(this.#config());
+    return true;
+  }
+
+  #config(): BindOptions {
     const {
       viewport,
       rotate = false,
       scale = { min: 0.1, max: 8 },
-      speed = 0.0015,
       plugins = [],
       keys,
     } = this.options;
@@ -36,7 +54,8 @@ export class Zoomable extends Shape<HTMLElement, ZoomableOptions> {
       ),
       space: "container",
     });
-    const binding = bind(this.node, {
+    return {
+      sensors,
       ...this.options,
       handle: viewport,
       action: transform({ translate: true, rotate, scale: true }),
@@ -47,9 +66,6 @@ export class Zoomable extends Shape<HTMLElement, ZoomableOptions> {
         "=": zoom(1.25),
         "-": zoom(0.8),
       },
-    });
-    return this.options.wheel === false
-      ? [binding]
-      : [binding, wheel(viewport, binding, speed)];
+    };
   }
 }

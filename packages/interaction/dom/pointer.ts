@@ -1,35 +1,26 @@
 import type { Point } from "@openconsole/matrix";
 
-import type { Input } from "../core";
-
-export interface Activation {
-  readonly distance?: number;
-  readonly delay?: number;
-  readonly tolerance?: number;
-}
+import {
+  input,
+  type Activation,
+  type Control,
+  type Mark,
+  type Sensor,
+} from "./sensor";
 
 export const deliberate = (type: string): Activation =>
   type === "touch" ? { delay: 250, tolerance: 5 } : { distance: 3 };
 
-export interface Target {
-  limit(): number;
-  activation(type: string): Activation;
-  start(input: Input): boolean;
-  move(input: Input): void;
-  end(input: Input): void;
-  cancel(): void;
-}
-
-export interface Marker {
-  readonly target: Target;
-  readonly kind: "handle" | "ignore";
+interface Claim {
+  readonly control: Control;
+  readonly kind: Mark["kind"];
   readonly priority: number;
 }
 
-type Lookup = (element: EventTarget) => readonly Marker[] | undefined;
+type Lookup = (element: EventTarget) => readonly Claim[] | undefined;
 
 interface Session {
-  readonly target: Target;
+  readonly control: Control;
   readonly handle: Element;
   readonly activation: Activation;
   readonly controller: AbortController;
@@ -44,41 +35,29 @@ interface Session {
 const interactive =
   "input, textarea, select, button, option, [contenteditable]:not([contenteditable='false'])";
 
-const markers = new WeakMap<EventTarget, readonly Marker[]>();
+const claims = new WeakMap<EventTarget, readonly Claim[]>();
 let session: Session | undefined;
-
-export const input = (
-  event: MouseEvent | KeyboardEvent,
-  points: Iterable<Point<2>> = [],
-): Input => ({
-  points: [...points],
-  modifiers: {
-    shift: event.shiftKey,
-    alt: event.altKey,
-    control: event.ctrlKey,
-    meta: event.metaKey,
-  },
-  event,
-  timestamp: event.timeStamp,
-});
 
 const locate = (event: PointerEvent): Point<2> => ({
   x: event.clientX,
   y: event.clientY,
 });
 
+const limit = ({ action: { freedom } }: Control): number =>
+  freedom.rotate || freedom.scale ? 2 : 1;
+
 function allows(
   path: readonly EventTarget[],
-  target: Target,
+  control: Control,
   find: Lookup,
 ): boolean {
   let best = -Infinity;
   let allowed = false;
   for (const element of path) {
-    for (const marker of find(element) ?? []) {
-      if (marker.target !== target || marker.priority <= best) continue;
-      best = marker.priority;
-      allowed = marker.kind === "handle";
+    for (const claim of find(element) ?? []) {
+      if (claim.control !== control || claim.priority <= best) continue;
+      best = claim.priority;
+      allowed = claim.kind === "handle";
     }
   }
   return allowed;
@@ -87,13 +66,13 @@ function allows(
 function pick(
   path: readonly EventTarget[],
   find: Lookup,
-): { handle: EventTarget; target: Target } | undefined {
+): { handle: EventTarget; control: Control } | undefined {
   for (const element of path) {
     const handles = (find(element) ?? [])
-      .filter((marker) => marker.kind === "handle")
+      .filter((claim) => claim.kind === "handle")
       .sort((left, right) => right.priority - left.priority);
-    for (const { target } of handles) {
-      if (allows(path, target, find)) return { handle: element, target };
+    for (const { control } of handles) {
+      if (allows(path, control, find)) return { handle: element, control };
     }
   }
   return undefined;
@@ -133,8 +112,8 @@ function prevent(event: Event): void {
 
 function begin(current: Session): void {
   if (current.started || session !== current) return;
-  const { handle, target, presses, pointers, first } = current;
-  if (!target.start(input(first, presses.values()))) {
+  const { handle, control, presses, pointers, first } = current;
+  if (!control.start(input(first, presses.values()))) {
     finish(current, "cancel", []);
     return;
   }
@@ -146,7 +125,7 @@ function begin(current: Session): void {
   document.addEventListener("selectionchange", clear, {
     signal: current.controller.signal,
   });
-  target.move(input(current.last, pointers.values()));
+  control.move(input(current.last, pointers.values()));
 }
 
 function finish(
@@ -159,20 +138,20 @@ function finish(
   current.controller.abort();
   if (current.timer !== undefined) clearTimeout(current.timer);
   if (!current.started) return;
-  const { handle, target } = current;
+  const { handle, control } = current;
   for (const id of current.presses.keys()) {
     if (handle.hasPointerCapture(id)) handle.releasePointerCapture(id);
   }
   if (kind === "cancel") {
-    target.cancel();
+    control.cancel();
     return;
   }
-  target.end(input(current.last, points));
+  control.end(input(current.last, points));
   suppress(handle.ownerDocument);
 }
 
 function join(current: Session, event: PointerEvent): void {
-  if (current.pointers.size >= current.target.limit()) return;
+  if (current.pointers.size >= limit(current.control)) return;
   if (!event.composedPath().includes(current.handle)) return;
   const point = locate(event);
   current.presses.set(event.pointerId, point);
@@ -180,7 +159,7 @@ function join(current: Session, event: PointerEvent): void {
   current.last = event;
   if (!current.started) return;
   capture(current.handle, event.pointerId);
-  current.target.move(input(event, current.pointers.values()));
+  current.control.move(input(event, current.pointers.values()));
 }
 
 function down(event: PointerEvent): void {
@@ -190,14 +169,14 @@ function down(event: PointerEvent): void {
     return;
   }
   const path = event.composedPath();
-  const found = pick(path, (element) => markers.get(element));
+  const found = pick(path, (element) => claims.get(element));
   if (!found || !(found.handle instanceof Element)) return;
   const handle = found.handle;
   if (blocked(path, handle)) return;
-  const activation = found.target.activation(event.pointerType);
+  const activation = found.control.activation(event.pointerType);
   const point = locate(event);
   const current: Session = {
-    target: found.target,
+    control: found.control,
     handle,
     activation,
     controller: new AbortController(),
@@ -229,7 +208,7 @@ function move(event: PointerEvent): void {
   current.pointers.set(event.pointerId, locate(event));
   current.last = event;
   if (current.started) {
-    current.target.move(input(event, current.pointers.values()));
+    current.control.move(input(event, current.pointers.values()));
     return;
   }
   const { delay, tolerance = 0, distance = 0 } = current.activation;
@@ -254,7 +233,7 @@ function up(event: PointerEvent): void {
     return;
   }
   if (current.started) {
-    current.target.move(input(event, current.pointers.values()));
+    current.control.move(input(event, current.pointers.values()));
   }
 }
 
@@ -278,32 +257,33 @@ function touch(event: TouchEvent): void {
   if (session?.started && event.cancelable) event.preventDefault();
 }
 
-export function register(element: Element, marker: Marker): () => void {
-  markers.set(element, [...(markers.get(element) ?? []), marker]);
+function register(element: Element, claim: Claim): () => void {
+  claims.set(element, [...(claims.get(element) ?? []), claim]);
   element.ownerDocument.addEventListener("pointerdown", down, {
     capture: true,
     passive: true,
   });
   const style =
-    marker.kind === "handle" &&
+    claim.kind === "handle" &&
     (element instanceof HTMLElement || element instanceof SVGElement)
       ? element.style
       : undefined;
   const saved = style?.touchAction;
   if (style) {
     style.touchAction =
-      marker.target.activation("touch").delay === undefined
+      claim.control.activation("touch").delay === undefined
         ? "none"
         : "manipulation";
   }
   return () => {
-    const rest = (markers.get(element) ?? []).filter((item) => item !== marker);
-    if (rest.length > 0) markers.set(element, rest);
-    else markers.delete(element);
+    const rest = (claims.get(element) ?? []).filter((item) => item !== claim);
+    if (rest.length > 0) claims.set(element, rest);
+    else claims.delete(element);
     if (style && saved !== undefined) style.touchAction = saved;
   };
 }
 
-export function forget(target: Target): void {
-  if (session?.target === target) finish(session, "cancel", []);
-}
+export const pointer =
+  (): Sensor =>
+  (control, { element, kind, priority }) =>
+    register(element, { control, kind, priority });

@@ -1,36 +1,27 @@
 import { plane } from "@openconsole/matrix";
 
-import type { Input, Step } from "../core";
-import { input } from "./router";
-
-interface Zoom {
-  start(input: Input): boolean;
-  nudge(step: Step): void;
-  end(input: Input): void;
-}
+import type { Input } from "../core";
+import { input, type Control, type Sensor } from "./sensor";
 
 const units = [1, 16, 800];
 
-export function wheel(
-  element: HTMLElement,
-  target: Zoom,
-  speed: number,
-): () => void {
+function attach(element: Element, control: Control, speed: number): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last: Input = { points: [] };
   const finish = () => {
     if (timer === undefined) return;
     clearTimeout(timer);
     timer = undefined;
-    target.end(last);
+    control.end(last);
   };
-  const listener = (event: WheelEvent) => {
+  const listener = (event: Event) => {
+    if (!(event instanceof WheelEvent)) return;
     event.preventDefault();
     last = input(event);
-    if (timer === undefined && !target.start(last)) return;
+    if (timer === undefined && !control.start(last)) return;
     clearTimeout(timer);
     const delta = event.deltaY * (units[event.deltaMode] ?? 1);
-    target.nudge({
+    control.nudge({
       matrix: plane.around(
         { x: event.clientX, y: event.clientY },
         plane.scale(Math.exp(-delta * speed)),
@@ -45,3 +36,8 @@ export function wheel(
     finish();
   };
 }
+
+export const wheel =
+  (speed = 0.0015): Sensor =>
+  (control, { element, kind }) =>
+    kind === "handle" ? attach(element, control, speed) : undefined;

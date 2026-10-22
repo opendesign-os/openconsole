@@ -79,16 +79,28 @@ export class Sortable extends Capability<
   }
 
   protected build(): readonly Part<Binding>[] {
-    const { plugins = [] } = this.options;
     return this.items.map((item, index) =>
-      bind(item, {
-        activation: deliberate,
-        ...this.options,
-        action: transform({ translate: true }),
-        plugins: [this.#slot(), ...plugins, lift(item), this.#track(item)],
-        keys: this.#keys(item),
-      }).assign({ index }),
+      bind(item, this.#config(item)).assign({ index }),
     );
+  }
+
+  protected apply(changes: Partial<SortableOptions>): boolean {
+    if ("items" in changes) return false;
+    for (const binding of this.units) {
+      binding.update(this.#config(binding.node));
+    }
+    return true;
+  }
+
+  #config(item: HTMLElement): BindOptions {
+    const { plugins = [] } = this.options;
+    return {
+      activation: deliberate,
+      ...this.options,
+      action: transform({ translate: true }),
+      plugins: [this.#slot(), ...plugins, lift(item), this.#track(item)],
+      keys: this.#keys(item),
+    };
   }
 
   #slot(): Plugin {

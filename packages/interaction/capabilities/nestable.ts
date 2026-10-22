@@ -15,6 +15,7 @@ import {
   reset,
   restore,
   type Binding,
+  type BindOptions,
 } from "../dom";
 import { Capability, type Bounds, type Guide, type Part } from "../model";
 import type { ListOptions, Place, Sort } from "./sortable";
@@ -88,25 +89,37 @@ export class Nestable extends Capability<
     const palette = sources
       ? [...this.node.ownerDocument.querySelectorAll(sources)]
       : [];
-    return [
-      ...items.map((item) => this.#bind(item, false)),
-      ...palette.flatMap((source) =>
-        source instanceof HTMLElement ? [this.#bind(source, true)] : [],
-      ),
-    ];
+    return [...items, ...palette].flatMap((node) =>
+      node instanceof HTMLElement ? [bind(node, this.#config(node))] : [],
+    );
   }
 
-  #bind(node: HTMLElement, source: boolean): Binding {
+  protected apply(changes: Partial<NestableOptions>): boolean {
+    if ("zones" in changes || "items" in changes || "sources" in changes) {
+      return false;
+    }
+    for (const binding of this.units) {
+      binding.update(this.#config(binding.node));
+    }
+    return true;
+  }
+
+  #config(node: HTMLElement): BindOptions {
     const { plugins = [] } = this.options;
-    return bind(node, {
+    return {
       activation: deliberate,
       ...this.options,
       action: transform({ translate: true }),
-      plugins: [...plugins, lift(node, this.node), this.#track(node, source)],
-    });
+      plugins: [...plugins, lift(node, this.node), this.#track(node)],
+    };
   }
 
-  #track(node: HTMLElement, source: boolean): Plugin {
+  #source(node: HTMLElement): boolean {
+    const { sources } = this.options;
+    return sources !== undefined && node.matches(sources);
+  }
+
+  #track(node: HTMLElement): Plugin {
     let find = probe([], node);
     let spot: Place | undefined;
     const show = guides(() => this.node, 2);
@@ -131,7 +144,7 @@ export class Nestable extends Capability<
       onEnd: () => {
         const target = finish();
         if (!target) restore(node, this.options.duration);
-        else if (source) this.#create(node, target);
+        else if (this.#source(node)) this.#create(node, target);
         else this.#drop(node, target);
       },
       onCancel: () => {

@@ -30,6 +30,7 @@ export interface Context {
   readonly anchor: Point<2>;
   readonly action: Action;
   readonly input: Input;
+  readonly released: boolean;
 }
 
 export interface Plugin {
@@ -40,6 +41,7 @@ export interface Plugin {
   onCancel?(context: Context): void;
   onChange?(context: Pick<Context, "state">): void;
   onDetach?(): void;
+  animating?(): boolean;
 }
 
 export interface TrackerOptions {
@@ -54,9 +56,10 @@ interface Session {
   base: State;
   from: readonly Point<2>[];
   points: readonly Point<2>[];
-  raw: State;
+  proposed: State;
   previous: State;
   input: Input;
+  released: boolean;
 }
 
 const initial: State = {
@@ -109,6 +112,17 @@ export class Tracker {
     return this.#session !== undefined;
   }
 
+  get released(): boolean {
+    return this.#session?.released ?? false;
+  }
+
+  get animating(): boolean {
+    return (
+      this.#session !== undefined &&
+      this.#plugins.some((plugin) => plugin.animating?.() === true)
+    );
+  }
+
   update({ action, plugins }: TrackerOptions): this {
     if (plugins) {
       if (this.#session) this.#pending = plugins;
@@ -135,9 +149,10 @@ export class Tracker {
       base: state,
       from: points,
       points,
-      raw: state,
+      proposed: state,
       previous: state,
       input,
+      released: false,
     };
     this.#session = session;
     const context = this.#context(session, state);
@@ -153,12 +168,12 @@ export class Tracker {
       plane.apply(session.frame, point),
     );
     if (points.length !== session.from.length) {
-      session.base = session.raw;
+      session.base = session.proposed;
       session.from = points;
     }
     session.points = points;
     session.input = input;
-    session.raw = session.action.solve(session.base, session.from, points);
+    session.proposed = session.action.solve(session.base, session.from, points);
     this.#commit(session);
     return this;
   }
@@ -168,9 +183,31 @@ export class Tracker {
     if (!session) return this;
     const matrix = apply(step, session.frame, this.#state.matrix);
     if (!matrix) return this;
-    session.raw = { ...this.#state, matrix };
-    session.base = session.raw;
+    session.proposed = { ...this.#state, matrix };
+    session.base = session.proposed;
     session.from = session.points;
+    this.#commit(session);
+    return this;
+  }
+
+  tick(timestamp: number): this {
+    const session = this.#session;
+    if (!session) return this;
+    session.input = { ...session.input, timestamp };
+    session.proposed = session.action.solve(
+      session.base,
+      session.from,
+      session.points,
+    );
+    this.#commit(session);
+    return this;
+  }
+
+  release(input?: Input): this {
+    const session = this.#session;
+    if (!session || session.released) return this;
+    session.released = true;
+    if (input) session.input = input;
     this.#commit(session);
     return this;
   }
@@ -213,12 +250,13 @@ export class Tracker {
       anchor: anchor(session.action.freedom, session.base, session.points),
       action: session.action,
       input: session.input,
+      released: session.released,
     };
   }
 
   #commit(session: Session): void {
-    const context = this.#context(session, session.raw);
-    let state = session.raw;
+    const context = this.#context(session, session.proposed);
+    let state = session.proposed;
     for (const plugin of this.#plugins) {
       const next = plugin.onMove?.({ ...context, state });
       if (next) state = next;

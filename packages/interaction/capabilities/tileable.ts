@@ -27,6 +27,7 @@ import {
   record,
   View,
   type Binding,
+  type BindOptions,
 } from "../dom";
 import {
   Capability,
@@ -85,7 +86,7 @@ function cell(state: State, tile: Tile, pitch: Pitch): Tile {
   };
 }
 
-function mark(container: HTMLElement): HTMLElement {
+function placeholder(container: HTMLElement): HTMLElement {
   const element = container.ownerDocument.createElement("div");
   element.dataset["layer"] = "placeholder";
   Object.assign(element.style, {
@@ -110,6 +111,20 @@ function cover(element: HTMLElement, tile: Tile, pitch: Pitch): void {
   });
 }
 
+const structure: ReadonlySet<string> = new Set([
+  "items",
+  "handles",
+  "sizing",
+  "columns",
+  "rowHeight",
+  "gap",
+  "rows",
+  "compact",
+  "collision",
+]);
+
+const none: readonly Element[] = [];
+
 const affects = (
   item: HTMLElement,
   { target, attributeName }: MutationRecord,
@@ -121,6 +136,7 @@ export class Tileable extends Capability<
   TileableOptions,
   Binding
 > {
+  readonly #configs = new Map<Binding, () => BindOptions>();
   #layout: Layout<HTMLElement> = new Map();
   #placeholder: HTMLElement | undefined;
 
@@ -152,6 +168,7 @@ export class Tileable extends Capability<
 
   protected build(): readonly Part<Binding>[] {
     const { node } = this;
+    this.#configs.clear();
     const height = node.style.height;
     const width = node.clientWidth;
     const items = this.items;
@@ -170,6 +187,12 @@ export class Tileable extends Capability<
         node.style.height = height;
       },
     ];
+  }
+
+  protected apply(changes: Partial<TileableOptions>): boolean {
+    if (Object.keys(changes).some((key) => structure.has(key))) return false;
+    for (const [binding, config] of this.#configs) binding.update(config());
+    return true;
   }
 
   #watch(): (() => void)[] {
@@ -272,28 +295,33 @@ export class Tileable extends Capability<
     const handles =
       options.handles?.(item) ??
       grips(item, [{ x: 1, y: options.sizing === "content" ? 0 : 1 }]);
-    const plugins = options.plugins ?? [];
-    const track = this.#track(item, pitch);
+    const keys = arrows(pitch.x, pitch.y);
     const size = limits({
       width: { min: pitch.x - pitch.gap, max: this.node.clientWidth },
       height: { min: pitch.y - pitch.gap },
     });
-    const drag = bind(item, {
+    const link = (config: () => BindOptions): Binding => {
+      const binding = bind(item, config());
+      this.#configs.set(binding, config);
+      return binding;
+    };
+    const plugins = () => this.options.plugins ?? [];
+    const drag = link(() => ({
       activation: deliberate,
-      ...options,
+      ...this.options,
       action: transform({ translate: true }),
-      plugins: [...plugins, lift(item), track],
-      keys: arrows(pitch.x, pitch.y),
-    });
+      plugins: [...plugins(), lift(item), this.#track(item, pitch)],
+      keys,
+    }));
     const resizers = [...handles].map(([handle, side]) =>
-      bind(item, {
+      link(() => ({
         activation: deliberate,
-        ...options,
+        ...this.options,
         handle,
-        ignore: [],
+        ignore: none,
         action: resize({ handle: side }),
-        plugins: [...plugins, size, lift(item), track],
-      }),
+        plugins: [...plugins(), size, lift(item), this.#track(item, pitch)],
+      })),
     );
     const created = options.handles
       ? []
@@ -319,7 +347,7 @@ export class Tileable extends Capability<
         origin = this.#layout;
         preview = origin;
         target = origin.get(item);
-        this.#placeholder = mark(this.node);
+        this.#placeholder = placeholder(this.node);
         if (target) cover(this.#placeholder, target, pitch);
       },
       onMove: ({ state, input }) => {

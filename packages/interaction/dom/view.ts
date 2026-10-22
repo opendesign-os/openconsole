@@ -34,16 +34,16 @@ export class View {
   readonly store: Store;
   render: Render | undefined;
   #offset: Point<2> = { x: 0, y: 0 };
-  #layout: Size;
-  #ready = false;
+  #size: Size;
+  #folded = false;
   #placed = false;
   #sized = false;
 
   private constructor(node: HTMLElement) {
     this.node = node;
-    this.#layout = size(node);
+    this.#size = size(node);
     this.store = new Store(
-      { matrix: plane.identity, size: this.#layout },
+      { matrix: plane.identity, size: this.#size },
       (state, patch) => this.#change(state, patch),
     );
     this.prepare();
@@ -62,7 +62,7 @@ export class View {
     if (!rendered(node)) return;
     const position = offset(node);
     const measured = size(node);
-    if (!this.#ready) {
+    if (!this.#folded) {
       const matrix = plane.multiply(
         plane.translate(position.x, position.y),
         fold(computed(node), measured) ?? plane.identity,
@@ -73,9 +73,9 @@ export class View {
       style.translate = "none";
       style.rotate = "none";
       style.scale = "none";
-      this.#ready = true;
+      this.#folded = true;
       this.#offset = position;
-      this.#layout = measured;
+      this.#size = measured;
       const changed = store.commit({
         matrix: this.#placed ? undefined : matrix,
         size: this.#sized ? undefined : measured,
@@ -86,7 +86,7 @@ export class View {
     if (
       position.x === this.#offset.x &&
       position.y === this.#offset.y &&
-      same(measured, this.#layout)
+      same(measured, this.#size)
     ) {
       return;
     }
@@ -95,7 +95,7 @@ export class View {
       position.y - this.#offset.y,
     );
     this.#offset = position;
-    this.#layout = measured;
+    this.#size = measured;
     store.commit({
       size: measured,
       matrix: plane.multiply(shift, store.state.matrix),
@@ -112,7 +112,7 @@ export class View {
   }
 
   #change(state: State, patch: Patch): void {
-    if (!this.#ready) {
+    if (!this.#folded) {
       this.#placed ||= Boolean(patch.matrix);
       this.#sized ||= Boolean(patch.size);
     }
@@ -125,10 +125,10 @@ export class View {
       render(node, state);
       return;
     }
-    if (!this.#ready) return;
-    if (!same(state.size, this.#layout)) {
+    if (!this.#folded) return;
+    if (!same(state.size, this.#size)) {
       write(node, state.size);
-      this.#layout = state.size;
+      this.#size = state.size;
       this.#offset = offset(node);
     }
     const matrix = plane.multiply(

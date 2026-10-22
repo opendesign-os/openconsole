@@ -8,12 +8,14 @@
   建立在 `bind` 与 `observe` 之上
 - **开箱即用**:不传手柄时自动生成调整尺寸与旋转的手柄;磁吸、碰撞一个开关即可;拖进或拖出容器只需一个选择器
 - **统一状态**:`State { matrix, size, index? }`,所有能力、所有插件读写同一种状态
-- **统一输入**:指针(最多两指)、键盘、滚轮与程序调用都换算成同一种输入,经矩阵引擎进入容器空间
+- **统一输入**:指针(最多两指)、键盘、滚轮都是可替换的输入源(`Sensor`),与程序调用一起换算成同一种输入,经矩阵引擎进入容器空间
 - **精确跟手**:祖先带旋转、斜切、非等比缩放时,拖拽、旋转、双指与调整尺寸仍贴着指针
 - **磁吸与碰撞**:贴边、居中与等间距吸附并显示参考线;碰撞做扫掠检测,快速拖动也不会穿过,撞上后沿障碍物滑动,
   旋转、缩放与调整尺寸停在接触处;嵌套、旋转的容器之间同样精确
-- **放置判定**:与 dnd-kit 的碰撞检测对应,内置指针落入(`within`)、相交比例(`overlap`)与中心最近(`nearest`)
-- **可扩展**:动作(`Action`)、插件(`Plugin`)、旁观者(`observe`)与渲染(`render`)都可替换
+- **放置判定**:与 dnd-kit 的碰撞检测对应,内置指针落入(`within`)、相交比例(`overlap`)与中心最近(`nearest`);
+  区域几何在会话开始时测量一次,放进可替换的空间索引
+- **可扩展**:动作(`Action`)、插件(`Plugin`)、输入源(`Sensor`)、空间索引(`Index`)、旁观者(`observe`)与渲染(`render`)都可替换;
+  插件可以请求动画帧,弹簧吸附、自动滚动与惯性都能写成插件
 - **无障碍**:键盘抓取与移动、Esc 取消,排序提供非拖拽的 `move()`
 - **逻辑与 DOM 分离**:`model/`、`core/` 与 `plugins/` 不引用任何 DOM API 或类型,可在 Node 中运行;读写 DOM 只在 `dom/`,`capabilities/` 负责组装;导入时不访问 DOM
 - 唯一依赖 `@openconsole/matrix`
@@ -208,9 +210,10 @@ interface Plugin {
   onMove?(context: Context): State | void; // 返回状态即替换候选
   onEnd?(context: Context): void;
   onCancel?(context: Context): void;
-  onChange?(context: { state }): void; // 每次提交后一次:移动、nudge、assign、cancel
+  onChange?(context: { state }): void; // 每次提交后一次:移动、nudge、帧、assign、cancel
   // onCancel 被调用时状态已回到起点,插件可以在此基础上再写入
   onDetach?(): void;
+  animating?(): boolean; // 返回 true 时继续出帧
 }
 ```
 
@@ -223,6 +226,41 @@ interface Plugin {
 | `anchor`       | 旋转、缩放保持不动的点(容器空间)          |
 | `action`       | 当前动作,插件按 `action.freedom` 决定行为 |
 | `input`        | 当前输入:`points`、`modifiers`、`event`   |
+| `released`     | 输入已结束(松手或键盘放下),会话还在出帧   |
+
+插件的 `animating()` 返回 `true` 时,`Binding` 在下一帧重放最后一次输入,`onMove` 再被调用一次(`input.timestamp`
+为帧时间),直到所有插件都返回 `false`:指针静止时弹簧仍能落到吸附点,贴边时能持续自动滚动。松手时先以
+`released: true` 再跑一帧,仍有插件在动画就继续出帧,停下后才触发 `onEnd`,惯性因此也是一个插件:
+
+```ts
+function inertia(friction = 0.9): Plugin {
+  let velocity = { x: 0, y: 0 };
+  let shift = { x: 0, y: 0 };
+  let last: { x: number; y: number; time: number } | undefined;
+  return {
+    onStart: () => {
+      velocity = { x: 0, y: 0 };
+      shift = { x: 0, y: 0 };
+      last = undefined;
+    },
+    onMove: ({ state, released, input: { timestamp = 0 } }) => {
+      const [, , , , x, y] = state.matrix;
+      if (!released) {
+        if (last && timestamp > last.time) {
+          const elapsed = timestamp - last.time;
+          velocity = { x: (x - last.x) / elapsed, y: (y - last.y) / elapsed };
+        }
+        last = { x, y, time: timestamp };
+        return undefined;
+      }
+      velocity = { x: velocity.x * friction, y: velocity.y * friction };
+      shift = { x: shift.x + velocity.x * 16, y: shift.y + velocity.y * 16 };
+      return { ...state, matrix: plane.multiply(plane.translate(shift.x, shift.y), state.matrix) };
+    },
+    animating: () => Math.hypot(velocity.x, velocity.y) > 0.01,
+  };
+}
+```
 
 内置插件按自由度处理,自定义动作也适用:
 
@@ -269,6 +307,7 @@ const stop = observe({ onMove: ({ node, state, input, data }) => {} }); // 旁�
 | `bind` 选项                              | 说明                                                       |
 | ---------------------------------------- | ---------------------------------------------------------- |
 | `action`                                 | 动作                                                       |
+| `sensors`                                | 输入源,默认 `[pointer(), keyboard()]`                      |
 | `handle`                                 | 句柄,默认为节点本身;命中元素与变换元素可以不同             |
 | `ignore`                                 | 排除区                                                     |
 | `plugins`                                | 插件                                                       |
@@ -279,9 +318,53 @@ const stop = observe({ onMove: ({ node, state, input, data }) => {} }); // 旁�
 | `data`                                   | 交给旁观者的载荷,放置时可读                                |
 | `onStart`、`onMove`、`onEnd`、`onCancel` | 会话回调                                                   |
 
-`Binding` 提供 `state`、`active`、`start(input)`、`move(input)`、`nudge(step)`、`end(input?)`、`cancel()`、`refresh()`、
-`update({ action, plugins })`、`assign(patch)`、`handle(element, options?)`、`ignore(element, options?)`、`destroy()`
-与 `[Symbol.dispose]()`。手柄、笔或回放等自定义输入直接调用这些方法。`handle`、`ignore` 选项也接受选择器,在节点内查找。
+`Binding` 提供 `options`、`state`、`active`、`start(input)`、`move(input)`、`nudge(step)`、`end(input?)`、`cancel()`、
+`refresh()`、`update(options)`、`assign(patch)`、`handle(element, options?)`、`ignore(element, options?)`、`destroy()`
+与 `[Symbol.dispose]()`。`update` 只写传入的选项并就地应用:插件与动作在会话结束后替换,句柄、输入源按需重新挂载,
+不打断进行中的拖拽。`handle`、`ignore` 选项也接受选择器,在节点内查找。
+
+### 输入源
+
+指针、键盘与滚轮都是 `Sensor`:绑定为每个句柄与排除区调用一次,传入可驱动的 `Control`(就是 `Binding`)与 `Mark`,
+返回清理函数。手柄、笔、回放或语音等新输入写成传感器,与内置的并列即可:
+
+```ts
+type Sensor = (control: Control, mark: Mark) => (() => void) | undefined;
+
+interface Control {
+  readonly node: HTMLElement;
+  readonly state: State;
+  readonly action: Action;
+  readonly keys: Keys;
+  activation(type: string): Activation;
+  start(input: Input): boolean;
+  move(input: Input): void;
+  nudge(step: Step): void;
+  end(input?: Input): void;
+  cancel(): void;
+}
+
+interface Mark {
+  readonly element: Element;
+  readonly kind: "handle" | "ignore";
+  readonly priority: number;
+}
+
+const remote: Sensor = (control, { element, kind }) => {
+  if (kind !== "handle") return undefined;
+  const listener = (event: Event) => {}; // 换算成 Input 后调用 control.start、move、end
+  element.addEventListener("remote", listener);
+  return () => element.removeEventListener("remote", listener);
+};
+
+bind(node, { action: transform({ translate: true }), sensors: [pointer(), keyboard(), remote] });
+```
+
+| 输入源          | 说明                                                                   |
+| --------------- | ---------------------------------------------------------------------- |
+| `pointer()`     | 文档级委托,沿 `composedPath()` 路由到句柄,1~2 指,`activation` 决定起动 |
+| `keyboard()`    | 绑定有 `keys` 时让句柄可聚焦,Space/Enter 抓取,按 `keys` 换算成 `Step`  |
+| `wheel(speed?)` | 绕指针缩放,停滚 150ms 后结束;`Zoomable` 默认带上                       |
 
 ### 输入与步进
 
@@ -321,6 +404,9 @@ canvas.addEventListener("pointermove", (event) => {
 canvas.addEventListener("pointerup", () => tracker.end());
 ```
 
+动画帧由驱动方安排:会话中 `tracker.animating` 为真时每帧调用 `tracker.tick(time)`;输入结束时先 `release(input)`,
+等 `animating` 变为假再 `end()`。
+
 多个 `Tracker` 共享同一份状态时用 `Store`:`join` 登记、`lock` 保证同一时间只有一个会话、`commit` 写入并同步给其他 `Tracker`、
 `assign` 只在没有会话时写入。DOM 层的 `View` 在 `Store` 之上加了折叠、测量与渲染。
 
@@ -335,19 +421,23 @@ canvas.addEventListener("pointerup", () => tracker.end());
 | `new X(node, options)` | 创建并立即生效                                                            |
 | `node`                 | 能力所在的节点                                                            |
 | `active`               | 是否有交互正在进行;`Droppable` 为是否有拖拽停在本区域上                   |
-| `update(options)`      | 只写传入的选项,随后按当前选项重建;会话中调用会取消当前会话                |
+| `update(options)`      | 只写传入的选项并就地应用,只有改变结构的选项才重建;会话中更新不打断会话    |
 | `refresh()`            | 按当前选项重建,例如增删了子元素之后                                       |
 | `destroy()`            | 销毁,可重复调用;另有 `[Symbol.dispose]()`,`options.signal` 中止时同样销毁 |
+
+会重建的选项:`Resizable` 的 `handles`、`symmetric`,`Rotatable` 的 `handle`,`Sortable` 的 `items`,`Nestable` 的
+`zones`、`items`、`sources`,`Tileable` 的 `items`、`handles`、`sizing`、`columns`、`rowHeight`、`gap`、`rows`、
+`compact`、`collision`;其余选项都就地生效。
 
 改变节点几何的 `Draggable`、`Rotatable`、`Resizable`、`Zoomable` 继承 `Shape`,另有 `state`(当前状态)与
 `assign(patch)`(写入 `matrix`、`size`;会话中不生效)。选项只放配置,状态只经 `assign` 写入,重建不会改变状态。
 
 | 能力                                     | 选项(另含 `bind` 的通用选项)                                                                                                |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `new Draggable(node, options?)`          | `container`(限定范围)、`grid`(吸附步长,有 `container` 时画网格线)、`lines`(默认 `true`)、`magnet`、`collide`、`nest`        |
+| `new Draggable(node, options?)`          | `container`(限定范围)、`grid`(吸附步长,有 `container` 时画网格线)、`gridlines`(默认 `true`)、`magnet`、`collide`、`nest`    |
 | `new Rotatable(node, options?)`          | `handle`(默认自动生成把手)、`pivot`(局部点,默认中心)、`step`(角度吸附,弧度)                                                 |
 | `new Resizable(node, options?)`          | `handles`(默认自动生成 8 个)、`symmetric`、`width`、`height`(范围)、`container`、`magnet`、`collide`                        |
-| `new Zoomable(world, { viewport, ... })` | `wheel`(默认 `true`)、`rotate`(默认 `false`)、`scale`(默认 0.1~8)、`speed`                                                  |
+| `new Zoomable(world, { viewport, ... })` | `rotate`(默认 `false`)、`scale`(默认 0.1~8);输入源默认 `[pointer(), keyboard(), wheel()]`                                   |
 | `new Droppable(zone, options?)`          | `accept`、`detect`(默认 `within`)、`onEnter`、`onOver`、`onLeave`、`onDrop`                                                 |
 | `new Sortable(list, options?)`           | `items`、`handle`、`ignore`(都是选择器)、`slot`(默认 `closest`)、`duration`、`onSort`                                       |
 | `new Tileable(grid, options?)`           | `columns`、`rowHeight`、`gap`、`rows`、`compact`、`collision`、`sizing`、`tile`、`handles`、`items`、`duration`、`onLayout` |
@@ -362,16 +452,21 @@ canvas.addEventListener("pointerup", () => tracker.end());
   超出 `rows` 时不再增高
 - `Nestable` 的 `zones` 为当前区域,`items(zone)` 为区域里的组件,`move(item, zone, index)` 程序化移动;拖动时显示插入线,
   松手才移动 DOM,随后组件回到文档流;`onSort` 的 `from` 对新建组件是它在面板里的位置
-- `Droppable` 的 `detect(zone, drag)` 返回分数或 `undefined`;命中多个时最内层优先,其次分数高者。`drag.point` 为指针,
-  没有指针(键盘)时为被拖元素的中心;`drag.shape` 为被拖元素在屏幕上的多边形
+- `Droppable` 的 `detect(zone, drag)` 返回分数或 `undefined`;命中多个时最内层优先,其次分数高者。`zone` 为
+  `{ element, shape }`,`shape` 是区域在屏幕上的多边形;`drag.point` 为指针,没有指针(键盘)时为被拖元素的中心;
+  `drag.shape` 为被拖元素在屏幕上的多边形
+- 区域在会话开始时测量一次(`accept` 也在此时判断),放进 `Droppable.index`,滚动后重新测量;每次移动只对与拖拽范围
+  (被拖元素与指针的包围盒)相交的区域判定。默认 `Linear`(逐个比较),区域很多时换成网格哈希 `Hash(size)`,或实现
+  `Index`(`insert`、`search`、`clear`)接入 R 树等:`Droppable.index = new Hash(128)`
 - 内置判定:`within`(指针落在区域内,默认)、`overlap`(交集面积除以并集面积,同 dnd-kit 的 `rectIntersection`)、
-  `nearest`(中心距离越近分数越高,同 `closestCenter`)
+  `nearest`(相交区域里中心距离越近分数越高)
 - `Sortable`、`Tileable`、`Nestable` 共用 `ListOptions`:`items`、`handle`、`ignore` 为选择器,`duration` 为过渡时长(默认 150ms)
 - `Sortable` 的 `slot(point, boxes)` 在容器空间里返回插入位置;事件为 `{ item, from: { list, index }, to: { list, index } }`;
   `items` 为当前条目,`move(item, index)` 程序化排序
-- 自定义能力继承 `Capability<N, O, U>`(或 `Shape<N, O>`),只实现 `build()`:返回本能力用到的单元 `U`(默认 `Unit`,
+- 自定义能力继承 `Capability<N, O, U>`(或 `Shape<N, O, U>`),实现 `build()`:返回本能力用到的单元 `U`(默认 `Unit`,
   即有 `active` 与 `destroy()` 的对象,如 `Binding`)与清理函数,其余生命周期由基类负责;`Shape` 另接收节点的 `Store`。
-  基类属于模型层,不引用 DOM,`N` 为节点类型
+  需要就地更新时覆写 `apply(changes)`:应用成功返回 `true`,返回 `false` 则按当前选项重建。基类属于模型层,不引用 DOM,
+  `N` 为节点类型
 
 ### 默认键盘
 
@@ -434,25 +529,29 @@ model/              - 模型:状态、存储与能力的基类约定,不引用 D
 └── store.ts        - Store:共享状态、会话锁、成员之间同步
 core/               - 逻辑:不引用 DOM
 ├── action.ts       - Action、Freedom、transform、resize
+├── choose.ts       - choose:按内外层与分数选出目标
 ├── frame.ts        - 屏幕 ↔ 容器空间
-├── order.ts        - 排序:closest 选位置,arrange 给出移动计划,rank 求插入位次
+├── sorting.ts      - 排序:closest 选位置,arrange 给出移动计划,rank 求插入位次
+├── spatial.ts      - 空间索引:Index、Linear、Hash
 ├── tiling.ts       - 磁贴:place、settle、vacant、bottom(推开、紧凑、找空位)
-├── tracker.ts      - Tracker:候选 → 插件 → 提交;hotspot 求拖拽热点
-└── zone.ts         - 放置:按内外层与分数选出目标
+└── tracker.ts      - Tracker:候选 → 插件 → 提交;hotspot 求拖拽热点
 plugins/            - 约束:grid、bounds、limits、angle、magnet、collide(不引用 DOM)
 dom/                - 适配:只有这里读写 DOM
 ├── bind.ts         - bind、observe、Binding
+├── flip.ts         - FLIP 过渡:record、play、restore,抓起时 hold 结束过渡
 ├── gridlines.ts    - 网格线插件
 ├── grips.ts        - 自动生成的调整尺寸手柄与旋转把手
 ├── guides.ts       - 参考线与插入线
-├── keyboard.ts     - 键盘
-├── measure.ts      - 测量:尺寸、矩形、outline(屏幕多边形)、outlines(磁吸与碰撞的目标)、probe(最内层命中)、query(取条目)
-├── motion.ts       - FLIP 过渡、抬高、回到布局位置
+├── keyboard.ts     - keyboard 输入源与 arrows
+├── lift.ts         - lift 插件:拖动时抬高节点与已定位的祖先
+├── measure.ts      - 测量:尺寸、矩形、outline(屏幕多边形)、intrinsic(自然高度)
 ├── nest.ts         - 拖进或拖出容器
-├── router.ts       - 指针路由、句柄与排除区
+├── pointer.ts      - pointer 输入源:指针路由、句柄与排除区
+├── sensor.ts       - 输入源约定:Sensor、Control、Mark、Activation、Keys 与 input
 ├── style.ts        - 计算样式 → 矩阵(fold)
+├── targets.ts      - 目标:query(取条目)、outlines(磁吸与碰撞的目标)、probe(最内层命中)
 ├── view.ts         - View:在 Store 之上折叠、测量、渲染;transfer、region、reset
-└── wheel.ts        - 滚轮
+└── wheel.ts        - wheel 输入源
 capabilities/       - 组装:draggable、rotatable、resizable、zoomable、droppable、sortable、tileable、nestable
 ```
 
