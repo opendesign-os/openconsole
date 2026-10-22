@@ -1,3 +1,10 @@
+/**
+ * @file `@openconsole/interaction` 的公开入口。
+ *
+ * `capabilities/` 与 `plugins/` 整体转发；`model/`、`core/`、`dom/` 显式列出公开成员，
+ * 状态合并、移动计划、目标选择、样式折叠、视图、输入路由与测量等内部函数不对外导出。
+ */
+
 export * from "./capabilities";
 export {
   bottom,

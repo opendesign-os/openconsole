@@ -1,3 +1,10 @@
+/**
+ * @file 碰撞插件：被拖元素不与障碍物重叠。
+ *
+ * 元素与障碍物都是容器空间里的凸多边形，用分离轴定理（SAT）判断重叠。平移时做扫掠求首次接触，
+ * 停在接触处并沿障碍物表面滑动；旋转、缩放与调整尺寸沿动作路径二分逼近，停在接触前。
+ */
+
 import { plane, type Point } from "@openconsole/matrix";
 
 import { pin, resizes, type Context, type Edges, type Plugin } from "../core";
@@ -9,8 +16,11 @@ import {
   type State,
 } from "../model";
 
+/** 扫掠的首次接触。 */
 interface Hit {
+  /** 接触时刻，为这一步位移的比例，取值 `[0, 1)`。 */
   readonly time: number;
+  /** 接触面的单位法线，背向位移方向，从障碍物指向被拖元素。 */
   readonly normal: Point<2>;
 }
 
@@ -22,6 +32,7 @@ const times = (vector: Point<2>, factor: number): Point<2> => ({
   y: vector.y * factor,
 });
 
+/** 去掉 `vector` 沿单位法线 `normal` 的分量，得到沿接触面的切向分量。 */
 function tangent(vector: Point<2>, normal: Point<2>): Point<2> {
   const depth = dot(vector, normal);
   return { x: vector.x - depth * normal.x, y: vector.y - depth * normal.y };
@@ -30,6 +41,7 @@ function tangent(vector: Point<2>, normal: Point<2>): Point<2> {
 const mix = (from: number, to: number, ratio: number): number =>
   from + (to - from) * ratio;
 
+/** 多边形各条边的单位法线，作为分离轴；零长的边跳过。 */
 function normals(polygon: Polygon): Point<2>[] {
   return polygon.flatMap((start, index) => {
     const end = polygon[(index + 1) % polygon.length] ?? start;
@@ -39,19 +51,23 @@ function normals(polygon: Polygon): Point<2>[] {
   });
 }
 
+/** SAT 需要检查的全部分离轴：两个多边形所有边的法线。 */
 const axes = (shape: Polygon, obstacle: Polygon): Point<2>[] => [
   ...normals(shape),
   ...normals(obstacle),
 ];
 
+/** 多边形在轴上的投影区间。 */
 function project(polygon: Polygon, axis: Point<2>): Span {
   const values = polygon.map((point) => dot(point, axis));
   return { min: Math.min(...values), max: Math.max(...values) };
 }
 
+/** 两个投影区间是否分离；恰好接触也算分离（留 `epsilon` 容差），贴边移动不会被判为重叠。 */
 const separated = (moving: Span, fixed: Span): boolean =>
   moving.max <= fixed.min + epsilon || fixed.max <= moving.min + epsilon;
 
+/** 分离轴定理：所有分离轴上的投影都相交时，两个凸多边形才重叠。 */
 function overlaps(shape: Polygon, obstacle: Polygon): boolean {
   const directions = axes(shape, obstacle);
   return (
@@ -62,6 +78,18 @@ function overlaps(shape: Polygon, obstacle: Polygon): boolean {
   );
 }
 
+/**
+ * 连续碰撞检测：形状沿 `motion` 平移时与障碍物首次接触的时刻。
+ *
+ * 在每条分离轴上求投影开始相交（进入）与不再相交（离开）的时刻，进入取各轴最大值、离开取最小值；
+ * 进入不晚于离开且落在这一步之内即为碰撞，法线取最后进入的那条轴。位移与某轴垂直时，
+ * 若该轴上已经分离，整段都不会相撞。
+ *
+ * @param shape 被拖元素当前的四个角。
+ * @param motion 这一步的平移（容器空间）。
+ * @param obstacle 障碍物。
+ * @returns 首次接触；整段都不相撞时为 `undefined`。
+ */
 function sweep(
   shape: Polygon,
   motion: Point<2>,
@@ -90,6 +118,7 @@ function sweep(
   return { time: Math.max(0, enter), normal };
 }
 
+/** 所有障碍物里最早的一次接触。 */
 function earliest(
   shape: Polygon,
   motion: Point<2>,
@@ -103,6 +132,13 @@ function earliest(
   return first;
 }
 
+/**
+ * 两个状态若只差平移（线性部分与尺寸都没变），返回平移向量。
+ *
+ * @param from 上一步的状态。
+ * @param to 候选状态。
+ * @returns 容器空间里的平移；有旋转、缩放或尺寸变化时为 `undefined`。
+ */
 function translation(from: State, to: State): Point<2> | undefined {
   const turned = !plane.equals(
     plane.linear(from.matrix),
@@ -115,6 +151,15 @@ function translation(from: State, to: State): Point<2> | undefined {
   return { x: to.matrix[4] - from.matrix[4], y: to.matrix[5] - from.matrix[5] };
 }
 
+/**
+ * 移动并滑动（move and slide）：从 `state` 沿 `motion` 平移，碰到障碍物就停在接触处，
+ * 把剩余位移去掉法向分量后沿表面继续走。最多迭代三次，足以处理夹角里的连续接触，又不会来回抖动。
+ *
+ * @param state 起点状态，即上一步的位置。
+ * @param motion 这一步的平移（容器空间）。
+ * @param obstacles 障碍物。
+ * @returns 滑动后的状态。
+ */
 function slide(
   state: State,
   motion: Point<2>,
@@ -140,8 +185,18 @@ function slide(
   return current;
 }
 
+/** 动作路径：`ratio` 从 0 到 1 时，由上一步的状态过渡到候选状态。 */
 type Path = (ratio: number) => State;
 
+/**
+ * 调整尺寸的路径：宽高线性插值，按会话起点钉住对边，与动作的钉住方式一致。
+ *
+ * @param from 上一步的状态。
+ * @param to 候选状态。
+ * @param origin 会话起点。
+ * @param edges 移动的边。
+ * @returns 沿尺寸插值的路径。
+ */
 function grow(from: State, to: State, origin: State, edges: Edges): Path {
   return (ratio) => {
     const size = {
@@ -152,6 +207,16 @@ function grow(from: State, to: State, origin: State, edges: Edges): Path {
   };
 }
 
+/**
+ * 旋转、缩放的路径。
+ *
+ * 两步之差 `to·from⁻¹` 若是相似变换（`a = d`、`b = −c`），解出它的不动点作为中心，
+ * 绕该点按比例插值角度、按指数插值缩放，元素沿真实的转动轨迹运动。
+ *
+ * @param from 上一步的状态。
+ * @param to 候选状态。
+ * @returns 绕不动点的路径；两步之差不是相似变换时为 `undefined`。
+ */
 function turn(from: State, to: State): Path | undefined {
   const inverse = plane.invert(from.matrix);
   if (!inverse) return undefined;
@@ -179,6 +244,13 @@ function turn(from: State, to: State): Path | undefined {
   });
 }
 
+/**
+ * 沿路径二分查找最后一个不重叠的位置；起点（上一步）不重叠，迭代 32 次。
+ *
+ * @param path 动作路径。
+ * @param blocked 判断状态是否与障碍物重叠。
+ * @returns 接触前一刻的状态。
+ */
 function advance(path: Path, blocked: (state: State) => boolean): State {
   let low = 0;
   let high = 1;
@@ -190,6 +262,25 @@ function advance(path: Path, blocked: (state: State) => boolean): State {
   return path(low);
 }
 
+/**
+ * 创建碰撞插件：被拖元素不与 `targets` 返回的障碍物重叠。
+ *
+ * - 会话开始时取一次障碍物；开始时就与元素重叠的障碍物被忽略，例如元素的祖先或它正压着的同伴，
+ *   否则元素一步也动不了。
+ * - 这一步只有平移：从上一步沿位移扫掠，停在首次接触处并沿障碍物表面滑动，快速拖动也不会穿过。
+ * - 有旋转、缩放或尺寸变化：候选与障碍物重叠时，沿「上一步 → 候选」的路径二分，停在接触前；
+ *   构造不出路径时退回上一步。
+ *
+ * 能力组合里它排在最后，所以吸附、范围与上下限之后的结果也不重叠。
+ *
+ * @param targets 返回障碍物的函数，每次会话开始时调用一次；障碍物须是容器空间里的凸多边形。
+ * @returns 实现 `onStart` 与 `onMove` 的插件。
+ * @example
+ * bind(node, {
+ *   action: transform({ translate: true }),
+ *   plugins: [collide(outlines(node, ".card", board))],
+ * });
+ */
 export function collide(
   targets: (context: Context) => Iterable<Polygon>,
 ): Plugin {
