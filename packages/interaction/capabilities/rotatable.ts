@@ -7,14 +7,14 @@ import {
   View,
   type Binding,
   type BindOptions,
+  type Elements,
   type Keys,
 } from "../dom";
 import { Shape, type CapabilityOptions, type Part, type State } from "../model";
 import { angle } from "../plugins";
 
 export interface RotatableOptions
-  extends Omit<BindOptions, "action" | "handle">, CapabilityOptions {
-  readonly handle?: Element | readonly Element[];
+  extends Omit<BindOptions, "action">, CapabilityOptions {
   readonly pivot?: Point<2>;
   readonly step?: number;
 }
@@ -50,7 +50,7 @@ export class Rotatable extends Shape<HTMLElement, RotatableOptions> {
     return [this.#bind(grip), () => grip.remove()];
   }
 
-  #bind(handle: Element | readonly Element[]): Binding {
+  #bind(handle: Elements): Binding {
     const { pivot, step, plugins = [], keys } = this.options;
     return bind(this.node, {
       ...this.options,

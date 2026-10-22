@@ -1,10 +1,11 @@
-import { plane, type Matrix, type Point } from "@openconsole/matrix";
+import { plane, type Point } from "@openconsole/matrix";
 
 import { pin, resizes, type Context, type Edges, type Plugin } from "../core";
 import {
   corners,
   epsilon,
   extent,
+  scale,
   type Bounds,
   type Guide,
   type Polygon,
@@ -13,7 +14,6 @@ import {
 } from "../model";
 
 export interface MagnetOptions {
-  readonly targets: (context: Context) => Iterable<Polygon>;
   readonly distance?: number;
   readonly onSnap?: (guides: readonly Guide[]) => void;
 }
@@ -32,12 +32,12 @@ interface Pair {
   readonly shared: Span;
 }
 
-interface Layout {
+interface Snaps {
   readonly lines: Readonly<Record<Axis, readonly Line[]>>;
   readonly pairs: Readonly<Record<Axis, readonly Pair[]>>;
 }
 
-const empty: Layout = { lines: { x: [], y: [] }, pairs: { x: [], y: [] } };
+const empty: Snaps = { lines: { x: [], y: [] }, pairs: { x: [], y: [] } };
 
 const along = (box: Bounds, axis: Axis): Span =>
   axis === "x"
@@ -66,9 +66,6 @@ function overlap(left: Span, right: Span): Span | undefined {
   const max = Math.min(left.max, right.max);
   return min < max ? { min, max } : undefined;
 }
-
-const scale = ([a, b, c, d]: Matrix<2, "affine">): number =>
-  Math.sqrt(Math.abs(a * d - b * c));
 
 function nearest(offsets: Iterable<number>, reach: number): number | undefined {
   let best: number | undefined;
@@ -115,17 +112,12 @@ function spots(box: Bounds, axis: Axis, pairs: readonly Pair[]): number[] {
   });
 }
 
-function offset(
-  box: Bounds,
-  axis: Axis,
-  layout: Layout,
-  reach: number,
-): number {
+function offset(box: Bounds, axis: Axis, snaps: Snaps, reach: number): number {
   const span = along(box, axis);
   const aligned = marks(span).flatMap((source) =>
-    layout.lines[axis].map((line) => line.value - source),
+    snaps.lines[axis].map((line) => line.value - source),
   );
-  const spaced = spots(box, axis, layout.pairs[axis]).map(
+  const spaced = spots(box, axis, snaps.pairs[axis]).map(
     (spot) => spot - span.min,
   );
   return nearest([...aligned, ...spaced], reach) ?? 0;
@@ -153,10 +145,10 @@ function growth(
   return start && end ? change * 2 : change;
 }
 
-function shift(state: State, layout: Layout, reach: number): State {
+function shift(state: State, snaps: Snaps, reach: number): State {
   const box = extent(corners(state));
-  const x = offset(box, "x", layout, reach);
-  const y = offset(box, "y", layout, reach);
+  const x = offset(box, "x", snaps, reach);
+  const y = offset(box, "y", snaps, reach);
   if (x === 0 && y === 0) return state;
   return {
     ...state,
@@ -168,7 +160,7 @@ function stretch(
   state: State,
   origin: State,
   edges: Edges,
-  layout: Layout,
+  snaps: Snaps,
   reach: number,
 ): State | undefined {
   const [a, b, c, d] = state.matrix;
@@ -176,7 +168,7 @@ function stretch(
     Math.abs(b) <= epsilon && Math.abs(c) <= epsilon && a > 0 && d > 0;
   if (!upright) return undefined;
   const box = extent(corners(state));
-  const { x, y } = layout.lines;
+  const { x, y } = snaps.lines;
   const width = growth(along(box, "x"), edges.left, edges.right, x, reach) / a;
   const height = growth(along(box, "y"), edges.top, edges.bottom, y, reach) / d;
   if (width === 0 && height === 0) return state;
@@ -189,14 +181,14 @@ function stretch(
 
 function snap(
   { state, origin, input, action: { freedom } }: Context,
-  layout: Layout,
+  snaps: Snaps,
   reach: number,
 ): State | undefined {
   if (input.points.length === 0) return undefined;
   if (resizes(freedom)) {
-    return stretch(state, origin, freedom.edges, layout, reach);
+    return stretch(state, origin, freedom.edges, snaps, reach);
   }
-  if (freedom.translate) return shift(state, layout, reach);
+  if (freedom.translate) return shift(state, snaps, reach);
   return undefined;
 }
 
@@ -250,11 +242,11 @@ function gaps(box: Bounds, axis: Axis, pairs: readonly Pair[]): Guide[] {
   });
 }
 
-const guides = (box: Bounds, layout: Layout): Guide[] => [
-  ...aligns(box, "x", layout.lines.x),
-  ...aligns(box, "y", layout.lines.y),
-  ...gaps(box, "x", layout.pairs.x),
-  ...gaps(box, "y", layout.pairs.y),
+const guides = (box: Bounds, snaps: Snaps): Guide[] => [
+  ...aligns(box, "x", snaps.lines.x),
+  ...aligns(box, "y", snaps.lines.y),
+  ...gaps(box, "x", snaps.pairs.x),
+  ...gaps(box, "y", snaps.pairs.y),
 ];
 
 const key = (guides: readonly Guide[]): string =>
@@ -262,12 +254,11 @@ const key = (guides: readonly Guide[]): string =>
     .map(({ kind, from, to }) => `${kind}${from.x},${from.y},${to.x},${to.y}`)
     .join();
 
-export function magnet({
-  targets,
-  distance = 5,
-  onSnap,
-}: MagnetOptions): Plugin {
-  let layout = empty;
+export function magnet(
+  targets: (context: Context) => Iterable<Polygon>,
+  { distance = 5, onSnap }: MagnetOptions = {},
+): Plugin {
+  let snaps = empty;
   let shown = "";
   const show = (next: readonly Guide[]) => {
     if (key(next) === shown) return;
@@ -277,14 +268,14 @@ export function magnet({
   return {
     onStart: (context) => {
       const boxes = [...targets(context)].map(extent);
-      layout = {
+      snaps = {
         lines: { x: collect(boxes, "x"), y: collect(boxes, "y") },
         pairs: { x: neighbors(boxes, "x"), y: neighbors(boxes, "y") },
       };
     },
     onMove: (context) => {
-      const next = snap(context, layout, distance * scale(context.frame));
-      show(next ? guides(extent(corners(next)), layout) : []);
+      const next = snap(context, snaps, distance * scale(context.frame));
+      show(next ? guides(extent(corners(next)), snaps) : []);
       return next;
     },
     onEnd: () => show([]),

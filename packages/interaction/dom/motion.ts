@@ -42,7 +42,7 @@ export function record(
 
 export function play(
   rects: ReadonlyMap<HTMLElement, DOMRect>,
-  duration: number,
+  duration = 150,
 ): void {
   if (duration <= 0) return;
   for (const [element, before] of rects) {
@@ -62,13 +62,13 @@ export function play(
   }
 }
 
-export function restore(node: HTMLElement, duration: number): void {
+export function restore(node: HTMLElement, duration?: number): void {
   const rects = record([node]);
   reset(node);
   play(rects, duration);
 }
 
-export function raise(element: HTMLElement, root?: Element): () => void {
+function raise(element: HTMLElement, root?: Element): () => void {
   const layers = [element];
   if (root?.contains(element)) {
     for (

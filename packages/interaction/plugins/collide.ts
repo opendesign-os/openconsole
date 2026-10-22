@@ -17,7 +17,7 @@ interface Hit {
 const dot = (left: Point<2>, right: Point<2>): number =>
   left.x * right.x + left.y * right.y;
 
-const scale = (vector: Point<2>, factor: number): Point<2> => ({
+const times = (vector: Point<2>, factor: number): Point<2> => ({
   x: vector.x * factor,
   y: vector.y * factor,
 });
@@ -82,7 +82,7 @@ function sweep(
     const far = speed > 0 ? fixed.max - moving.min : fixed.min - moving.max;
     if (near / speed > enter) {
       enter = near / speed;
-      normal = speed > 0 ? scale(axis, -1) : axis;
+      normal = speed > 0 ? times(axis, -1) : axis;
     }
     exit = Math.min(exit, far / speed);
   }
@@ -126,7 +126,7 @@ function slide(
     if (Math.hypot(rest.x, rest.y) <= epsilon) break;
     const hit = earliest(corners(current), rest, obstacles);
     const time = hit?.time ?? 1;
-    const travel = scale(rest, time);
+    const travel = times(rest, time);
     current = {
       ...current,
       matrix: plane.multiply(
@@ -135,7 +135,7 @@ function slide(
       ),
     };
     if (!hit) break;
-    rest = tangent(scale(rest, 1 - time), hit.normal);
+    rest = tangent(times(rest, 1 - time), hit.normal);
   }
   return current;
 }

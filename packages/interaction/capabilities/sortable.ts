@@ -12,8 +12,9 @@ import {
   bind,
   box,
   deliberate,
+  lift,
   play,
-  raise,
+  query,
   record,
   restore,
   View,
@@ -40,15 +41,18 @@ export interface Sort {
   readonly to: Place;
 }
 
-export interface SortableOptions
+export interface ListOptions
   extends
     Omit<BindOptions, "action" | "handle" | "ignore" | "keys">,
     CapabilityOptions {
   readonly items?: string;
   readonly handle?: string;
   readonly ignore?: string;
-  readonly slot?: Slot;
   readonly duration?: number;
+}
+
+export interface SortableOptions extends ListOptions {
+  readonly slot?: Slot;
   readonly onSort?: (sort: Sort) => void;
 }
 
@@ -63,10 +67,7 @@ export class Sortable extends Capability<
   }
 
   get items(): HTMLElement[] {
-    const selector = this.options.items ?? ":scope > *";
-    return [...this.node.querySelectorAll(selector)].filter(
-      (element) => element instanceof HTMLElement,
-    );
+    return query(this.node, this.options.items);
   }
 
   move(item: HTMLElement, index: number): this {
@@ -84,7 +85,7 @@ export class Sortable extends Capability<
         activation: deliberate,
         ...this.options,
         action: transform({ translate: true }),
-        plugins: [this.#slot(), ...plugins, this.#apply(item)],
+        plugins: [this.#slot(), ...plugins, lift(item), this.#track(item)],
         keys: this.#keys(item),
       }).assign({ index }),
     );
@@ -102,30 +103,26 @@ export class Sortable extends Capability<
     };
   }
 
-  #apply(item: HTMLElement): Plugin {
+  #track(item: HTMLElement): Plugin {
     let from = -1;
-    let lower: (() => void) | undefined;
-    const settle = (back: boolean) => {
+    const finish = (back: boolean) => {
       const start = from;
       from = -1;
       if (back) this.#reorder(item, start);
-      restore(item, this.options.duration ?? 150);
-      lower?.();
-      lower = undefined;
+      restore(item, this.options.duration);
       this.#index();
       if (!back) this.#announce(item, start);
     };
     return {
       onStart: () => {
         from = this.items.indexOf(item);
-        lower = raise(item);
       },
       onChange: ({ state }) => {
         if (from < 0 || state.index === undefined) return;
         if (this.#reorder(item, state.index)) View.of(item).relayout();
       },
-      onEnd: () => settle(false),
-      onCancel: () => settle(true),
+      onEnd: () => finish(false),
+      onCancel: () => finish(true),
     };
   }
 
@@ -165,7 +162,7 @@ export class Sortable extends Capability<
       positions.flatMap((position) => items[position] ?? []);
     item.before(...nodes(before));
     item.after(...nodes(after));
-    play(rects, this.options.duration ?? 150);
+    play(rects, this.options.duration);
     return true;
   }
 

@@ -10,11 +10,11 @@ const open: Bounds = {
   bottom: Infinity,
 };
 
-const inside = (box: Bounds, area: Bounds): boolean =>
-  box.left >= area.left &&
-  box.top >= area.top &&
-  box.right <= area.right &&
-  box.bottom <= area.bottom;
+const inside = (box: Bounds, region: Bounds): boolean =>
+  box.left >= region.left &&
+  box.top >= region.top &&
+  box.right <= region.right &&
+  box.bottom <= region.bottom;
 
 function shift(low: number, high: number, min: number, max: number): number {
   if (high - low > max - min || low < min) return min - low;
@@ -25,7 +25,7 @@ function shift(low: number, high: number, min: number, max: number): number {
 function limit(
   at: (value: number) => readonly Point<2>[],
   value: number,
-  area: Bounds,
+  region: Bounds,
 ): number {
   const zero = at(0);
   const one = at(1);
@@ -37,14 +37,14 @@ function limit(
       {
         base: start.x,
         slope: end.x - start.x,
-        min: area.left,
-        max: area.right,
+        min: region.left,
+        max: region.right,
       },
       {
         base: start.y,
         slope: end.y - start.y,
-        min: area.top,
-        max: area.bottom,
+        min: region.top,
+        max: region.bottom,
       },
     ];
     for (const { base, slope, min, max } of lines) {
@@ -60,7 +60,7 @@ function limit(
   return low > high ? value : Math.min(Math.max(value, low), high);
 }
 
-function fit(state: State, origin: State, edges: Edges, area: Bounds): State {
+function fit(state: State, origin: State, edges: Edges, region: Bounds): State {
   const shape = (width: number, height: number) => {
     const size = { width, height };
     return corners({ ...state, size, matrix: pin(origin, size, edges) });
@@ -70,28 +70,28 @@ function fit(state: State, origin: State, edges: Edges, area: Bounds): State {
       ? limit(
           (value) => shape(value, state.size.height),
           state.size.width,
-          area,
+          region,
         )
       : state.size.width;
   const height =
     edges.top || edges.bottom
-      ? limit((value) => shape(width, value), state.size.height, area)
+      ? limit((value) => shape(width, value), state.size.height, region)
       : state.size.height;
   return { ...state, size: { width, height } };
 }
 
 export function bounds(measure: () => Bounds): Plugin {
-  let area = open;
+  let region = open;
   return {
     onStart: () => {
-      area = measure();
+      region = measure();
     },
     onMove: ({ state, origin, previous, action: { freedom } }) => {
       const box = extent(corners(state));
-      if (inside(box, area)) return undefined;
+      if (inside(box, region)) return undefined;
       if (resizes(freedom)) {
-        return inside(extent(corners(origin)), area)
-          ? fit(state, origin, freedom.edges, area)
+        return inside(extent(corners(origin)), region)
+          ? fit(state, origin, freedom.edges, region)
           : undefined;
       }
       if (!freedom.translate) return previous;
@@ -99,8 +99,8 @@ export function bounds(measure: () => Bounds): Plugin {
         ...state,
         matrix: plane.multiply(
           plane.translate(
-            shift(box.left, box.right, area.left, area.right),
-            shift(box.top, box.bottom, area.top, area.bottom),
+            shift(box.left, box.right, region.left, region.right),
+            shift(box.top, box.bottom, region.top, region.bottom),
           ),
           state.matrix,
         ),

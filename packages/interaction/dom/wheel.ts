@@ -3,7 +3,7 @@ import { plane } from "@openconsole/matrix";
 import type { Input, Step } from "../core";
 import { input } from "./router";
 
-interface Spin {
+interface Zoom {
   start(input: Input): boolean;
   nudge(step: Step): void;
   end(input: Input): void;
@@ -13,7 +13,7 @@ const units = [1, 16, 800];
 
 export function wheel(
   element: HTMLElement,
-  target: Spin,
+  target: Zoom,
   speed: number,
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;

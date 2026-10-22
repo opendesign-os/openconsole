@@ -1,6 +1,6 @@
 # @openconsole/interaction
 
-指针交互:拖拽、放置、调整尺寸、排序、旋转、平移缩放(协作在规划中)。所有能力共用一个状态模型与一套矩阵换算,借助 `@openconsole/matrix` 在带变换的容器里精确跟手。
+指针交互:拖拽、放置、调整尺寸、排序、旋转、平移缩放、磁贴与嵌套编辑。所有能力共用一个状态模型与一套矩阵换算,借助 `@openconsole/matrix` 在带变换的容器里精确跟手。
 
 ## 特性
 
@@ -15,7 +15,7 @@
 - **放置判定**:与 dnd-kit 的碰撞检测对应,内置指针落入(`within`)、相交比例(`overlap`)与中心最近(`nearest`)
 - **可扩展**:动作(`Action`)、插件(`Plugin`)、旁观者(`observe`)与渲染(`render`)都可替换
 - **无障碍**:键盘抓取与移动、Esc 取消,排序提供非拖拽的 `move()`
-- **逻辑与 DOM 分离**:`model/`、`core/` 与 `plugins/` 不引用任何 DOM API 或类型,在 Node 中测试;读写 DOM 只在 `dom/`,`capabilities/` 负责组装;导入时不访问 DOM
+- **逻辑与 DOM 分离**:`model/`、`core/` 与 `plugins/` 不引用任何 DOM API 或类型,可在 Node 中运行;读写 DOM 只在 `dom/`,`capabilities/` 负责组装;导入时不访问 DOM
 - 唯一依赖 `@openconsole/matrix`
 
 ## 在本仓库中使用
@@ -42,7 +42,7 @@ const drag = new Draggable(card, {
   handle: title, // 只能从标题栏拖
   ignore: badge, // 标题栏里的徽标不触发
 });
-drag.update({ snap: false }); // 只改传入的选项
+drag.update({ grid: 10 }); // 只改传入的选项
 drag.assign({ matrix: plane.translate(120, 80) }); // 写状态:直接改位置(容器坐标)
 drag.destroy();
 ```
@@ -233,7 +233,7 @@ interface Plugin {
 | `limits({ width, height, scale })`      | 夹住移动边的尺寸;能缩放时绕 `anchor` 夹住缩放                                                   |
 | `angle(step)`                           | 能旋转时把角度吸附到步长(弧度),绕 `anchor`                                                      |
 | `gridlines(container, step)`            | 在容器里铺一层网格线;同一容器、同一步长只画一层(位于 `dom/`,会创建元素)                         |
-| `magnet({ targets, distance, onSnap })` | 能平移时把包围盒的边与中线吸到目标的边与中线,并做等间距吸附;调整尺寸时只吸移动边;键盘移动不吸附 |
+| `magnet(targets, { distance, onSnap })` | 能平移时把包围盒的边与中线吸到目标的边与中线,并做等间距吸附;调整尺寸时只吸移动边;键盘移动不吸附 |
 | `collide(targets)`                      | 不与目标重叠:平移做扫掠检测并沿障碍物滑动;旋转、缩放与调整尺寸沿动作二分逼近,停在接触处         |
 
 - `targets(context)` 在会话开始时调用一次,返回容器空间里的多边形;`magnet` 的 `distance` 为屏幕像素(默认 5),
@@ -344,7 +344,7 @@ canvas.addEventListener("pointerup", () => tracker.end());
 
 | 能力                                     | 选项(另含 `bind` 的通用选项)                                                                                                |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `new Draggable(node, options?)`          | `container`(限定范围,为 `offsetParent` 时画网格线)、`grid`(步长)、`snap`、`lines`(默认 `true`)、`magnet`、`collide`、`nest` |
+| `new Draggable(node, options?)`          | `container`(限定范围)、`grid`(吸附步长,有 `container` 时画网格线)、`lines`(默认 `true`)、`magnet`、`collide`、`nest`        |
 | `new Rotatable(node, options?)`          | `handle`(默认自动生成把手)、`pivot`(局部点,默认中心)、`step`(角度吸附,弧度)                                                 |
 | `new Resizable(node, options?)`          | `handles`(默认自动生成 8 个)、`symmetric`、`width`、`height`(范围)、`container`、`magnet`、`collide`                        |
 | `new Zoomable(world, { viewport, ... })` | `wheel`(默认 `true`)、`rotate`(默认 `false`)、`scale`(默认 0.1~8)、`speed`                                                  |
@@ -366,6 +366,7 @@ canvas.addEventListener("pointerup", () => tracker.end());
   没有指针(键盘)时为被拖元素的中心;`drag.shape` 为被拖元素在屏幕上的多边形
 - 内置判定:`within`(指针落在区域内,默认)、`overlap`(交集面积除以并集面积,同 dnd-kit 的 `rectIntersection`)、
   `nearest`(中心距离越近分数越高,同 `closestCenter`)
+- `Sortable`、`Tileable`、`Nestable` 共用 `ListOptions`:`items`、`handle`、`ignore` 为选择器,`duration` 为过渡时长(默认 150ms)
 - `Sortable` 的 `slot(point, boxes)` 在容器空间里返回插入位置;事件为 `{ item, from: { list, index }, to: { list, index } }`;
   `items` 为当前条目,`move(item, index)` 程序化排序
 - 自定义能力继承 `Capability<N, O, U>`(或 `Shape<N, O>`),只实现 `build()`:返回本能力用到的单元 `U`(默认 `Unit`,
@@ -428,7 +429,7 @@ canvas.addEventListener("pointerup", () => tracker.end());
 index.ts            - 公开 API:model、core、dom 显式列出,capabilities、plugins 整体转发
 model/              - 模型:状态、存储与能力的基类约定,不引用 DOM
 ├── capability.ts   - Capability、Shape:能力的基类与生命周期
-├── geometry.ts     - Span、Range、Bounds、Polygon、Guide 与 extent、centroid、area、contains、intersect
+├── geometry.ts     - Span、Range、Bounds、Polygon、Guide 与 extent、centroid、area、scale、contains、intersect
 ├── state.ts        - State、Patch 与 merge、corners、center
 └── store.ts        - Store:共享状态、会话锁、成员之间同步
 core/               - 逻辑:不引用 DOM
@@ -436,7 +437,7 @@ core/               - 逻辑:不引用 DOM
 ├── frame.ts        - 屏幕 ↔ 容器空间
 ├── order.ts        - 排序:closest 选位置,arrange 给出移动计划,rank 求插入位次
 ├── tiling.ts       - 磁贴:place、settle、vacant、bottom(推开、紧凑、找空位)
-├── tracker.ts      - Tracker:候选 → 插件 → 提交
+├── tracker.ts      - Tracker:候选 → 插件 → 提交;hotspot 求拖拽热点
 └── zone.ts         - 放置:按内外层与分数选出目标
 plugins/            - 约束:grid、bounds、limits、angle、magnet、collide(不引用 DOM)
 dom/                - 适配:只有这里读写 DOM
@@ -445,12 +446,12 @@ dom/                - 适配:只有这里读写 DOM
 ├── grips.ts        - 自动生成的调整尺寸手柄与旋转把手
 ├── guides.ts       - 参考线与插入线
 ├── keyboard.ts     - 键盘
-├── measure.ts      - 测量:尺寸、矩形、outline(屏幕多边形)、outlines(磁吸与碰撞的目标)
+├── measure.ts      - 测量:尺寸、矩形、outline(屏幕多边形)、outlines(磁吸与碰撞的目标)、probe(最内层命中)、query(取条目)
 ├── motion.ts       - FLIP 过渡、抬高、回到布局位置
 ├── nest.ts         - 拖进或拖出容器
 ├── router.ts       - 指针路由、句柄与排除区
 ├── style.ts        - 计算样式 → 矩阵(fold)
-├── view.ts         - View:在 Store 之上折叠、测量、渲染;transfer、area、reset
+├── view.ts         - View:在 Store 之上折叠、测量、渲染;transfer、region、reset
 └── wheel.ts        - 滚轮
 capabilities/       - 组装:draggable、rotatable、resizable、zoomable、droppable、sortable、tileable、nestable
 ```

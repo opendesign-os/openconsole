@@ -34,7 +34,7 @@ const moved = (tile: Tile, axis: Axis, value: number): Tile =>
 const flow = (tiling: Tiling): Axis =>
   tiling.compact === "horizontal" ? "x" : "y";
 
-export const collides = (left: Tile, right: Tile): boolean =>
+const collides = (left: Tile, right: Tile): boolean =>
   left.x < right.x + right.width &&
   right.x < left.x + left.width &&
   left.y < right.y + right.height &&

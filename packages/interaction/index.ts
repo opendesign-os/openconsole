@@ -33,6 +33,7 @@ export {
   type Activation,
   type Binding,
   type BindOptions,
+  type Elements,
   type Key,
   type Keys,
   type Observer,

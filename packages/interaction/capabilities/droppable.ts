@@ -1,6 +1,6 @@
 import { plane, type Point } from "@openconsole/matrix";
 
-import { choose, type Candidate } from "../core";
+import { choose, hotspot, type Candidate } from "../core";
 import { observe, outline, type Session } from "../dom";
 import {
   area,
@@ -62,11 +62,10 @@ function describe(session: Session): Drag {
   const shape = inverse
     ? polygon.map((point) => plane.apply(inverse, point))
     : polygon;
-  const { points } = session.input;
   return {
     node: session.node,
     data: session.data,
-    point: centroid(points.length > 0 ? points : shape),
+    point: hotspot(session) ?? centroid(shape),
     shape,
   };
 }

@@ -37,10 +37,12 @@ export interface Observer {
   onCancel?(session: Session): void;
 }
 
+export type Elements = Element | readonly Element[] | string;
+
 export interface BindOptions {
   readonly action: Action;
-  readonly handle?: Element | readonly Element[] | string;
-  readonly ignore?: Element | readonly Element[] | string;
+  readonly handle?: Elements;
+  readonly ignore?: Elements;
   readonly plugins?: readonly Plugin[];
   readonly activation?: Activation | ((type: string) => Activation);
   readonly priority?: number;
@@ -64,7 +66,7 @@ export function observe(observer: Observer): () => void {
 
 function list(
   node: HTMLElement,
-  value: Element | readonly Element[] | string | undefined,
+  value: Elements | undefined,
 ): readonly Element[] {
   if (typeof value === "string") return [...node.querySelectorAll(value)];
   return value instanceof Element ? [value] : (value ?? []);

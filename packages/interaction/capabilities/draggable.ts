@@ -1,6 +1,5 @@
 import { transform } from "../core";
 import {
-  area,
   arrows,
   bind,
   gridlines,
@@ -8,6 +7,7 @@ import {
   lift,
   nest,
   outlines,
+  region,
   View,
   type BindOptions,
 } from "../dom";
@@ -18,7 +18,6 @@ export interface DraggableOptions
   extends Omit<BindOptions, "action">, CapabilityOptions {
   readonly container?: HTMLElement;
   readonly grid?: number;
-  readonly snap?: boolean;
   readonly lines?: boolean;
   readonly magnet?: boolean | string;
   readonly collide?: boolean | string;
@@ -33,14 +32,7 @@ export class Draggable extends Shape<HTMLElement, DraggableOptions> {
 
   protected build(): readonly Part[] {
     const { node, options } = this;
-    const {
-      container,
-      grid: step = 0,
-      snap = true,
-      lines = true,
-      plugins = [],
-      keys,
-    } = options;
+    const { container, grid: step = 0, lines = true, plugins = [] } = options;
     const scope = container ?? node.ownerDocument;
     const home = container ?? node.parentElement;
     return [
@@ -48,15 +40,14 @@ export class Draggable extends Shape<HTMLElement, DraggableOptions> {
         ...options,
         action: transform({ translate: true }),
         plugins: [
-          step > 0 && snap ? grid(step) : undefined,
+          step > 0 ? grid(step) : undefined,
           options.magnet
-            ? magnet({
-                targets: outlines(node, options.magnet, scope),
+            ? magnet(outlines(node, options.magnet, scope), {
                 onSnap: guides(() => node.offsetParent),
               })
             : undefined,
           ...plugins,
-          container && bounds(area(container, node)),
+          container && bounds(region(container, node)),
           options.collide
             ? collide(outlines(node, options.collide, scope))
             : undefined,
@@ -66,7 +57,7 @@ export class Draggable extends Shape<HTMLElement, DraggableOptions> {
             ? gridlines(container, step)
             : undefined,
         ].filter((plugin) => plugin !== undefined),
-        keys: keys ?? arrows(step > 0 ? step : 1),
+        keys: options.keys ?? arrows(step > 0 ? step : 1),
       }),
     ];
   }

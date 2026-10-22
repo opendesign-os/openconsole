@@ -1,4 +1,4 @@
-import type { Point } from "@openconsole/matrix";
+import type { Matrix, Point } from "@openconsole/matrix";
 
 export interface Span {
   readonly min: number;
@@ -76,6 +76,9 @@ export function centroid(points: Polygon): Point<2> {
 }
 
 export const area = (polygon: Polygon): number => Math.abs(signed(polygon));
+
+export const scale = ([a, b, c, d]: Matrix<2, "affine">): number =>
+  Math.sqrt(Math.abs(a * d - b * c));
 
 export function contains(polygon: Polygon, point: Point<2>): boolean {
   let winding = 0;

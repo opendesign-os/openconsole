@@ -2,7 +2,7 @@
   "name": "@openconsole/interaction",
   "version": "0.0.1",
   "private": true,
-  "description": "指针交互：拖拽、放置、调整尺寸、排序、旋转、平移缩放与协作；与 DOM 解耦的跟手逻辑、基于 matrix 的精确跟手",
+  "description": "指针交互：拖拽、放置、调整尺寸、排序、旋转、平移缩放、磁贴与嵌套编辑；与 DOM 解耦的跟手逻辑、基于 matrix 的精确跟手",
   "license": "MIT",
   "keywords": [
     "interaction",
@@ -13,7 +13,8 @@
     "sort",
     "rotate",
     "zoom",
-    "collaboration",
+    "grid",
+    "nest",
     "pointer",
     "matrix",
     "plugin",

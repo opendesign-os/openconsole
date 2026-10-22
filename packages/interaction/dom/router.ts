@@ -67,7 +67,7 @@ const locate = (event: PointerEvent): Point<2> => ({
   y: event.clientY,
 });
 
-export function allows(
+function allows(
   path: readonly EventTarget[],
   target: Target,
   find: Lookup,
@@ -84,7 +84,7 @@ export function allows(
   return allowed;
 }
 
-export function pick(
+function pick(
   path: readonly EventTarget[],
   find: Lookup,
 ): { handle: EventTarget; target: Target } | undefined {
@@ -217,7 +217,7 @@ function down(event: PointerEvent): void {
   document.addEventListener("lostpointercapture", lost, options);
   document.addEventListener("dragstart", prevent, options);
   document.addEventListener("keydown", escape, options);
-  document.addEventListener("touchmove", hold, { ...options, passive: false });
+  document.addEventListener("touchmove", touch, { ...options, passive: false });
   if (activation.delay !== undefined) {
     current.timer = setTimeout(() => begin(current), activation.delay);
   }
@@ -274,7 +274,7 @@ function escape(event: KeyboardEvent): void {
   finish(session, "cancel", []);
 }
 
-function hold(event: TouchEvent): void {
+function touch(event: TouchEvent): void {
   if (session?.started && event.cancelable) event.preventDefault();
 }
 
@@ -289,7 +289,7 @@ export function register(element: Element, marker: Marker): () => void {
     (element instanceof HTMLElement || element instanceof SVGElement)
       ? element.style
       : undefined;
-  const touch = style?.touchAction;
+  const saved = style?.touchAction;
   if (style) {
     style.touchAction =
       marker.target.activation("touch").delay === undefined
@@ -300,7 +300,7 @@ export function register(element: Element, marker: Marker): () => void {
     const rest = (markers.get(element) ?? []).filter((item) => item !== marker);
     if (rest.length > 0) markers.set(element, rest);
     else markers.delete(element);
-    if (style && touch !== undefined) style.touchAction = touch;
+    if (style && saved !== undefined) style.touchAction = saved;
   };
 }
 

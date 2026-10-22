@@ -1,50 +1,29 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import { choose, rank, transform, type Plugin } from "../core";
+import { hotspot, rank, transform, type Plugin } from "../core";
 import {
   bind,
   deliberate,
   guides,
   inward,
   layered,
-  outline,
+  lift,
   play,
-  raise,
+  probe,
   record,
+  rect,
   reset,
   restore,
   type Binding,
-  type BindOptions,
 } from "../dom";
-import {
-  Capability,
-  center,
-  centroid,
-  contains,
-  type CapabilityOptions,
-  type Guide,
-  type Part,
-  type Polygon,
-} from "../model";
-import type { Place, Sort } from "./sortable";
+import { Capability, type Bounds, type Guide, type Part } from "../model";
+import type { ListOptions, Place, Sort } from "./sortable";
 
-export interface NestableOptions
-  extends
-    Omit<BindOptions, "action" | "handle" | "ignore" | "keys">,
-    CapabilityOptions {
+export interface NestableOptions extends ListOptions {
   readonly zones?: string;
-  readonly items?: string;
-  readonly handle?: string;
-  readonly ignore?: string;
   readonly sources?: string;
   readonly create?: (source: HTMLElement) => HTMLElement;
-  readonly duration?: number;
   readonly onSort?: (sort: Sort) => void;
-}
-
-interface Zone {
-  readonly element: HTMLElement;
-  readonly polygon: Polygon;
 }
 
 const horizontal = (zone: HTMLElement): boolean => {
@@ -55,13 +34,13 @@ const horizontal = (zone: HTMLElement): boolean => {
 };
 
 function boundary(
-  before: DOMRect | undefined,
-  after: DOMRect | undefined,
-  zone: DOMRect,
+  before: Bounds | undefined,
+  after: Bounds | undefined,
+  zone: Bounds,
   row: boolean,
 ): number {
-  const start = (box: DOMRect) => (row ? box.left : box.top);
-  const end = (box: DOMRect) => (row ? box.right : box.bottom);
+  const start = (box: Bounds) => (row ? box.left : box.top);
+  const end = (box: Bounds) => (row ? box.right : box.bottom);
   if (before && after) return (end(before) + start(after)) / 2;
   if (after) return start(after);
   if (before) return end(before);
@@ -123,18 +102,15 @@ export class Nestable extends Capability<
       activation: deliberate,
       ...this.options,
       action: transform({ translate: true }),
-      plugins: [...plugins, this.#track(node, source)],
+      plugins: [...plugins, lift(node, this.node), this.#track(node, source)],
     });
   }
 
   #track(node: HTMLElement, source: boolean): Plugin {
-    let zones: Zone[] = [];
+    let find = probe([], node);
     let spot: Place | undefined;
-    let lower: (() => void) | undefined;
     const show = guides(() => this.node, 2);
     const finish = () => {
-      lower?.();
-      lower = undefined;
       show([]);
       const target = spot;
       spot = undefined;
@@ -142,52 +118,35 @@ export class Nestable extends Capability<
     };
     return {
       onStart: () => {
-        lower = raise(node, this.node);
-        zones = this.zones.flatMap((element) => {
-          if (node.contains(element)) return [];
-          const polygon = outline(element);
-          return polygon ? [{ element, polygon }] : [];
-        });
+        find = probe(this.zones, node);
       },
-      onMove: ({ state, frame, input }) => {
-        const inverse = plane.invert(frame);
-        const point =
-          input.points.length > 0
-            ? centroid(input.points)
-            : inverse && plane.apply(inverse, center(state));
+      onMove: (context) => {
+        const point = hotspot(context);
+        const zone = point && find(point);
         const map = inward(this.node);
-        spot = point && this.#locate(zones, point, node);
+        spot = point && zone && this.#locate(zone, point, node);
         show(spot && map ? this.#line(spot, node, map) : []);
         return undefined;
       },
       onEnd: () => {
         const target = finish();
-        if (!target) restore(node, this.options.duration ?? 150);
+        if (!target) restore(node, this.options.duration);
         else if (source) this.#create(node, target);
         else this.#drop(node, target);
       },
       onCancel: () => {
         finish();
-        restore(node, this.options.duration ?? 150);
+        restore(node, this.options.duration);
       },
     };
   }
 
-  #locate(
-    zones: readonly Zone[],
-    point: Point<2>,
-    node: HTMLElement,
-  ): Place | undefined {
-    const inside = zones.flatMap(({ element, polygon }) =>
-      contains(polygon, point) ? [{ target: element, score: 0 }] : [],
-    );
-    const zone = choose(inside, (outer, inner) => outer.contains(inner));
-    if (!zone) return undefined;
+  #locate(zone: HTMLElement, point: Point<2>, node: HTMLElement): Place {
     const row = horizontal(zone);
     const middles = this.items(zone)
       .filter((item) => item !== node)
       .map((item) => {
-        const box = item.getBoundingClientRect();
+        const box = rect(item);
         return row ? (box.left + box.right) / 2 : (box.top + box.bottom) / 2;
       });
     return { list: zone, index: rank(row ? point.x : point.y, middles) };
@@ -199,10 +158,10 @@ export class Nestable extends Capability<
     map: Matrix<2, "affine">,
   ): Guide[] {
     const row = horizontal(list);
-    const zone = list.getBoundingClientRect();
+    const zone = rect(list);
     const boxes = this.items(list)
       .filter((item) => item !== node)
-      .map((item) => item.getBoundingClientRect());
+      .map(rect);
     const position = boundary(boxes[index - 1], boxes[index], zone, row);
     const ends: readonly Point<2>[] = row
       ? [
@@ -225,7 +184,7 @@ export class Nestable extends Capability<
     const rects = record(new Set([...this.items(origin), ...siblings, item]));
     list.insertBefore(item, siblings[index] ?? null);
     reset(item);
-    play(rects, this.options.duration ?? 150);
+    play(rects, this.options.duration);
     const to = { list, index: this.items(list).indexOf(item) };
     if (from.list === to.list && from.index === to.index) return;
     this.options.onSort?.({ item, from, to });
@@ -233,14 +192,14 @@ export class Nestable extends Capability<
 
   #create(source: HTMLElement, { list, index }: Place): void {
     const origin = source.parentElement;
-    const rect = source.getBoundingClientRect();
+    const start = source.getBoundingClientRect();
     reset(source);
     const item = (this.options.create ?? copy)(source);
     if (!origin || !item) return;
     const siblings = this.items(list);
     const rects = record(siblings);
     list.insertBefore(item, siblings[index] ?? null);
-    play(new Map([...rects, [item, rect]]), this.options.duration ?? 150);
+    play(new Map([...rects, [item, start]]), this.options.duration);
     const from = { list: origin, index: [...origin.children].indexOf(source) };
     this.options.onSort?.({ item, from, to: { list, index } });
     queueMicrotask(() => this.refresh());

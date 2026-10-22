@@ -1,11 +1,11 @@
 import { resize, type Handle } from "../core";
 import {
-  area,
   bind,
   grips,
   guides,
   outlines,
   range,
+  region,
   View,
   type Binding,
   type BindOptions,
@@ -63,13 +63,12 @@ export class Resizable extends Shape<HTMLElement, ResizableOptions> {
         action: resize({ handle: side, symmetric }),
         plugins: [
           options.magnet
-            ? magnet({
-                targets: outlines(node, options.magnet, scope),
+            ? magnet(outlines(node, options.magnet, scope), {
                 onSnap: guides(() => node.offsetParent),
               })
             : undefined,
           ...plugins,
-          container && bounds(area(container, node)),
+          container && bounds(region(container, node)),
           limit,
           options.collide
             ? collide(outlines(node, options.collide, scope))

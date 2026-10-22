@@ -16,7 +16,7 @@ const axes = new Map([
   ["z", { x: 0, y: 0, z: 1 }],
 ]);
 
-export function rotation(text: string): Matrix<3, "projective"> {
+function rotation(text: string): Matrix<3, "projective"> {
   if (text === "none") return space.identity;
   const parts = text.split(" ");
   const angle = (Number.parseFloat(parts.at(-1) ?? "") * Math.PI) / 180;

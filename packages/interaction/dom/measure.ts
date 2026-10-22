@@ -1,7 +1,8 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import { frame, type Context } from "../core";
+import { choose, frame, type Context } from "../core";
 import {
+  contains,
   corners,
   type Bounds,
   type Polygon,
@@ -116,6 +117,24 @@ export function outline(node: HTMLElement): Polygon | undefined {
   return matrix && corners({ matrix, size: box });
 }
 
+export function probe(
+  elements: Iterable<Element>,
+  node: HTMLElement,
+): (point: Point<2>) => HTMLElement | undefined {
+  const areas = [...elements].flatMap((target) => {
+    if (!(target instanceof HTMLElement) || node.contains(target)) return [];
+    const polygon = outline(target);
+    return polygon ? [{ target, polygon }] : [];
+  });
+  return (point) =>
+    choose(
+      areas.flatMap(({ target, polygon }) =>
+        contains(polygon, point) ? [{ target, score: 0 }] : [],
+      ),
+      (outer, inner) => outer.contains(inner),
+    );
+}
+
 export function inward(node: HTMLElement): Matrix<2, "affine"> | undefined {
   const matrix = pose(node, size(node));
   const shift = plane.translate(
@@ -141,6 +160,14 @@ export function client(node: HTMLElement): Polygon | undefined {
 
 export const layered = (element: Element): boolean =>
   element instanceof HTMLElement && element.dataset["layer"] !== undefined;
+
+export const query = (
+  root: ParentNode,
+  selector = ":scope > *",
+): HTMLElement[] =>
+  [...root.querySelectorAll(selector)].flatMap((element) =>
+    element instanceof HTMLElement && !layered(element) ? [element] : [],
+  );
 
 function targets(
   node: HTMLElement,

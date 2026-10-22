@@ -21,40 +21,31 @@ import {
   deliberate,
   grips,
   intrinsic,
-  layered,
+  lift,
   play,
-  raise,
+  query,
   record,
   View,
   type Binding,
-  type BindOptions,
 } from "../dom";
 import {
   Capability,
   epsilon,
   merge,
-  type CapabilityOptions,
   type Part,
   type Patch,
   type State,
 } from "../model";
 import { limits } from "../plugins";
+import type { ListOptions } from "./sortable";
 
-export interface TileableOptions
-  extends
-    Omit<BindOptions, "action" | "handle" | "ignore" | "keys">,
-    Omit<Tiling, "columns">,
-    CapabilityOptions {
-  readonly items?: string;
-  readonly handle?: string;
-  readonly ignore?: string;
+export interface TileableOptions extends ListOptions, Omit<Tiling, "columns"> {
   readonly handles?: (item: HTMLElement) => ReadonlyMap<Element, Handle>;
   readonly columns?: number;
   readonly rowHeight?: number;
   readonly gap?: number;
   readonly sizing?: "fixed" | "content";
   readonly tile?: (item: HTMLElement, index: number) => Partial<Tile>;
-  readonly duration?: number;
   readonly onLayout?: (layout: Layout<HTMLElement>) => void;
 }
 
@@ -139,10 +130,7 @@ export class Tileable extends Capability<
   }
 
   get items(): HTMLElement[] {
-    const selector = this.options.items ?? ":scope > *";
-    return [...this.node.querySelectorAll(selector)].flatMap((element) =>
-      element instanceof HTMLElement && !layered(element) ? [element] : [],
-    );
+    return query(this.node, this.options.items);
   }
 
   get layout(): Layout<HTMLElement> {
@@ -294,7 +282,7 @@ export class Tileable extends Capability<
       activation: deliberate,
       ...options,
       action: transform({ translate: true }),
-      plugins: [...plugins, track],
+      plugins: [...plugins, lift(item), track],
       keys: arrows(pitch.x, pitch.y),
     });
     const resizers = [...handles].map(([handle, side]) =>
@@ -304,7 +292,7 @@ export class Tileable extends Capability<
         handle,
         ignore: [],
         action: resize({ handle: side }),
-        plugins: [...plugins, size, track],
+        plugins: [...plugins, size, lift(item), track],
       }),
     );
     const created = options.handles
@@ -321,12 +309,9 @@ export class Tileable extends Capability<
     let origin = this.#layout;
     let preview = origin;
     let target: Tile | undefined;
-    let lower: (() => void) | undefined;
     const finish = (layout: Layout<HTMLElement>) => {
       this.#placeholder?.remove();
       this.#placeholder = undefined;
-      lower?.();
-      lower = undefined;
       this.#commit(layout);
     };
     return {
@@ -334,7 +319,6 @@ export class Tileable extends Capability<
         origin = this.#layout;
         preview = origin;
         target = origin.get(item);
-        lower = raise(item);
         this.#placeholder = mark(this.node);
         if (target) cover(this.#placeholder, target, pitch);
       },
@@ -386,7 +370,7 @@ export class Tileable extends Capability<
       const tile = layout.get(item);
       if (tile) View.of(item).store.assign(patch(tile, pitch));
     }
-    play(rects, this.options.duration ?? 150);
+    play(rects, this.options.duration);
     const rows = bottom(layout);
     this.node.style.height = `${Math.max(0, rows * pitch.y - pitch.gap)}px`;
   }

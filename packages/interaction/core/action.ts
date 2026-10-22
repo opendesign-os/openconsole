@@ -31,7 +31,7 @@ export interface Handle {
   readonly y: -1 | 0 | 1;
 }
 
-const still: Edges = { left: false, top: false, right: false, bottom: false };
+const none: Edges = { left: false, top: false, right: false, bottom: false };
 
 export const resizes = ({ edges }: Freedom): boolean =>
   edges.left || edges.top || edges.right || edges.bottom;
@@ -92,7 +92,7 @@ export function transform(
     translate,
     rotate,
     scale,
-    edges: still,
+    edges: none,
     ...(pivot ? { pivot } : {}),
   };
   return {

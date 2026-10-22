@@ -1,6 +1,6 @@
 import { plane } from "@openconsole/matrix";
 
-import type { Guide } from "../model";
+import { scale, type Guide } from "../model";
 import { linear, own } from "./measure";
 
 const layers = new WeakMap<Element, HTMLElement>();
@@ -31,34 +31,34 @@ function draw(
 }
 
 export function guides(
-  target: () => Element | null,
+  host: () => Element | null,
   width = 1,
 ): (lines: readonly Guide[]) => void {
   let thickness = width;
   return (lines) => {
-    const host = target();
-    if (!(host instanceof HTMLElement)) return;
-    let layer = layers.get(host);
+    const element = host();
+    if (!(element instanceof HTMLElement)) return;
+    let layer = layers.get(element);
     if (lines.length === 0) {
       layer?.remove();
-      layers.delete(host);
+      layers.delete(element);
       return;
     }
     if (!layer) {
-      layer = host.ownerDocument.createElement("div");
+      layer = element.ownerDocument.createElement("div");
       layer.dataset["layer"] = "guides";
       Object.assign(layer.style, {
         position: "absolute",
         inset: "0",
         pointerEvents: "none",
       });
-      host.append(layer);
-      layers.set(host, layer);
-      const [a, b, c, d] = plane.multiply(linear(host), own(host));
-      thickness = width / Math.sqrt(Math.abs(a * d - b * c)) || width;
+      element.append(layer);
+      layers.set(element, layer);
+      thickness =
+        width / scale(plane.multiply(linear(element), own(element))) || width;
     }
     layer.replaceChildren(
-      ...lines.map((guide) => draw(host.ownerDocument, guide, thickness)),
+      ...lines.map((guide) => draw(element.ownerDocument, guide, thickness)),
     );
   };
 }

@@ -1,6 +1,6 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import { merge, type Patch, type State } from "../model";
+import { center, centroid, merge, type Patch, type State } from "../model";
 import { anchor, pin, resizes, transform, type Action } from "./action";
 
 export interface Modifiers {
@@ -64,10 +64,15 @@ const initial: State = {
   size: { width: 0, height: 0 },
 };
 
-const convert = (
-  frame: Matrix<2, "affine">,
-  points: readonly Point<2>[],
-): readonly Point<2>[] => points.map((point) => plane.apply(frame, point));
+export function hotspot({
+  state,
+  frame,
+  input,
+}: Pick<Context, "state" | "frame" | "input">): Point<2> | undefined {
+  if (input.points.length > 0) return centroid(input.points);
+  const inverse = plane.invert(frame);
+  return inverse && plane.apply(inverse, center(state));
+}
 
 function apply(
   step: Step,
@@ -122,7 +127,7 @@ export class Tracker {
   start(input: Input, frame: Matrix<2, "affine"> = plane.identity): this {
     if (this.#session) return this;
     const state = this.#state;
-    const points = convert(frame, input.points);
+    const points = input.points.map((point) => plane.apply(frame, point));
     const session: Session = {
       action: this.#action,
       origin: state,
@@ -144,7 +149,9 @@ export class Tracker {
     const session = this.#session;
     if (!session) return this;
     if (frame) session.frame = frame;
-    const points = convert(session.frame, input.points);
+    const points = input.points.map((point) =>
+      plane.apply(session.frame, point),
+    );
     if (points.length !== session.from.length) {
       session.base = session.raw;
       session.from = points;

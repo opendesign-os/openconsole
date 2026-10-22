@@ -155,7 +155,7 @@ export function transfer(node: HTMLElement, container: HTMLElement): boolean {
   return true;
 }
 
-export const area =
+export const region =
   (container: HTMLElement, node: HTMLElement) => (): Bounds => {
     const whole = {
       left: 0,
