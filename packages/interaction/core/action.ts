@@ -3,13 +3,22 @@
  *
  * 动作只负责按自由度求解，约束交给插件。传入的点都已经由 frame 换到容器空间
  * （offsetParent 内边距盒，左上为原点），所以祖先带旋转、斜切、缩放时同样跟手。
+ *
+ * 内置两类动作：{@link transform} 处理平移、旋转与等比缩放，拖拽、旋转、双指与平移缩放共用；
+ * {@link resize} 按手柄方位改宽高并钉住对边。{@link resizes}、{@link anchor}、{@link pin}
+ * 供管线与插件复用，保证插件改写候选后仍满足同样的几何约定。
  */
 
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
 import { centroid, type Size, type State } from "../model";
 
-/** 调整尺寸时会移动的局部边；同一对边都为 `true` 表示两侧对称调整。 */
+/**
+ * 调整尺寸时会移动的局部边；同一对边都为 `true` 表示两侧对称调整。
+ *
+ * 由 {@link resize} 按手柄方位生成，{@link pin} 据此决定哪条边（或中心）保持不动。
+ * 边是节点局部空间里的边，节点旋转后依然指同一条边。
+ */
 export interface Edges {
   /** 左边会移动。 */
   readonly left: boolean;
@@ -28,7 +37,7 @@ export interface Edges {
  * 有边会移动就处理尺寸，能缩放就夹住缩放。
  */
 export interface Freedom {
-  /** 允许平移。 */
+  /** 允许平移；为 `true` 且有输入点时，旋转、缩放绕输入点的质心进行。 */
   readonly translate: boolean;
   /** 允许旋转。 */
   readonly rotate: boolean;
@@ -36,16 +45,22 @@ export interface Freedom {
   readonly scale: boolean;
   /** 调整尺寸时移动的边；全为 `false` 表示不改尺寸。 */
   readonly edges: Edges;
-  /** 不允许平移时，旋转、缩放保持不动的点（局部空间）。缺省为边框盒中心。 */
+  /**
+   * 旋转、缩放保持不动的点（局部空间，像素），在不允许平移或没有输入点时使用。
+   * 缺省为边框盒中心。
+   */
   readonly pivot?: Point<2>;
 }
 
 /**
  * 动作：由起止输入点求出新状态，并声明自由度。
  *
- * 由 {@link Tracker} 每帧调用。`origin` 是本段的段基准，`from` 是段起点时的输入点，
+ * 由 `Tracker` 每帧调用。`origin` 是本段的段基准，`from` 是段起点时的输入点，
  * `to` 是当前输入点；每帧都从段基准整体求解而不是逐事件累加，避免误差累积，
  * 也避免约束（夹边、碰撞）丢掉的位移让元素脱离指针。
+ *
+ * 实现应当是纯函数：同样的输入给出同样的结果（`tick` 会用同一组输入重复求解），
+ * 且不修改传入的状态与点。
  */
 export interface Action {
   /** 本动作的自由度，插件据此决定行为。 */
@@ -68,6 +83,8 @@ export interface Action {
 /**
  * 调整尺寸的手柄方位。`x`、`y` 取 -1、0、1，分别表示左（上）边、不动、右（下）边。
  * 例如右下角为 `{ x: 1, y: 1 }`，右边中点为 `{ x: 1, y: 0 }`。
+ *
+ * 方位同时是尺寸变化的符号：拖右边手柄向右移动时宽度增加，拖左边手柄向右移动时宽度减少。
  */
 export interface Handle {
   /** 水平方位：-1 左边，0 不动，1 右边。 */
@@ -76,11 +93,13 @@ export interface Handle {
   readonly y: -1 | 0 | 1;
 }
 
-/** 不改尺寸的动作使用的边集合。 */
+/** 不改尺寸的动作使用的边集合：四条边都不动。 */
 const none: Edges = { left: false, top: false, right: false, bottom: false };
 
 /**
  * 判断自由度是否会调整尺寸。
+ *
+ * 管线据此在插件之后重新钉住对边，插件据此决定是否处理 `size`。
  *
  * @param freedom 动作的自由度。
  * @returns 有任一边会移动时为 `true`。
@@ -92,6 +111,7 @@ export const resizes = ({ edges }: Freedom): boolean =>
  * 求旋转、缩放保持不动的锚点（容器空间）。
  *
  * 允许平移时取输入点的质心，两指手势因此绕手指中心变换；否则取支点，缺省为边框盒中心。
+ * 没有输入点（键盘、滚轮）时同样取支点。
  *
  * @param freedom 动作的自由度。
  * @param state 段基准状态，用来把局部支点换到容器空间。
@@ -122,12 +142,18 @@ export function anchor(
  * @param size 新尺寸。
  * @param edges 会移动的边。
  * @returns 新的状态矩阵（局部空间 → 容器空间）。
+ * @example
+ * const origin = { matrix: plane.identity, size: { width: 100, height: 50 } };
+ * const edges = { left: true, top: false, right: false, bottom: false };
+ * pin(origin, { width: 80, height: 50 }, edges);
+ * // [1, 0, 0, 1, 20, 0]：只动左边，局部平移 20，右边仍在 x = 100
  */
 export function pin(
   origin: State,
   size: Size,
   edges: Edges,
 ): Matrix<2, "affine"> {
+  /** 一条轴上的平移系数 f：只动低边（左、上）为 1，两侧都动为 ½，其余为 0。 */
   const share = (low: boolean, high: boolean) => (low ? (high ? 0.5 : 1) : 0);
   return plane.multiply(
     origin.matrix,
@@ -144,6 +170,11 @@ export function pin(
  *
  * τ、θ、k 是同一次手势同时求出的三个分量，不是先后发生的操作；不允许的分量取零
  * （τ = 0、θ = 0、k = 1），各分量互不干扰，结果与分量顺序无关。
+ *
+ * @param motion 由输入点求出的相似变换 G（容器空间）。
+ * @param point 锚点 a（容器空间），旋转与缩放绕它进行。
+ * @param freedom 动作的自由度，决定保留哪些分量。
+ * @returns 投影后的变换 G′（容器空间），左乘到段基准矩阵上即得新的状态矩阵。
  */
 function project(
   motion: Matrix<2, "affine">,
@@ -167,9 +198,9 @@ function project(
  * - 一个点、允许平移：按位移平移。
  * - 一个点、不允许平移：以锚点为虚拟第一点求旋转与缩放（单指旋转）。
  *
- * 随后按自由度投影，再左乘到段基准矩阵上：`M = G′·M_base`。
+ * 随后按自由度投影，再左乘到段基准矩阵上：`M = G′·M_base`。尺寸保持不变。
  *
- * @param options 自由度开关与支点。
+ * @param options 自由度开关与支点；缺省时三项自由度都关闭，动作不改变状态。
  * @returns 动作。
  * @example
  * transform({ translate: true }); // 拖拽
@@ -180,20 +211,23 @@ export function transform(
   options: {
     /**
      * 允许平移。
+     *
      * @default false
      */
     readonly translate?: boolean;
     /**
      * 允许旋转。
+     *
      * @default false
      */
     readonly rotate?: boolean;
     /**
      * 允许等比缩放。
+     *
      * @default false
      */
     readonly scale?: boolean;
-    /** 不允许平移时的支点（局部空间），缺省为边框盒中心。 */
+    /** 不允许平移时的支点（局部空间，像素），缺省为边框盒中心。 */
     readonly pivot?: Point<2>;
   } = {},
 ): Action {
@@ -207,6 +241,7 @@ export function transform(
   };
   return {
     freedom,
+    /** 两点按 pinch、一点按位移或绕锚点求出相似变换，投影后左乘到段基准矩阵上。 */
     solve(origin, from, to) {
       const [first, second] = from;
       const [last, next] = to;
@@ -231,6 +266,7 @@ export function transform(
  *
  * 指针位移先换到局部空间（去掉旋转与缩放），再按手柄方位改宽高，随后钉住对边。
  * 对称时两侧同时移动，尺寸变化计两倍。尺寸不小于 0，其余范围交给 `limits` 插件。
+ * 只看第一个输入点；段基准矩阵的线性部分不可逆时不改变状态。
  *
  * @param options 手柄方位与是否对称。
  * @returns 动作。
@@ -243,6 +279,7 @@ export function resize(options: {
   readonly handle: Handle;
   /**
    * 两侧对称调整，中心不动。
+   *
    * @default false
    */
   readonly symmetric?: boolean;
@@ -259,6 +296,7 @@ export function resize(options: {
   const factor = symmetric ? 2 : 1;
   return {
     freedom: { translate: false, rotate: false, scale: false, edges },
+    /** 把指针位移换到局部空间，按手柄方位改宽高，再钉住不动的边。 */
     solve(origin, from, to) {
       const [first] = from;
       const [last] = to;

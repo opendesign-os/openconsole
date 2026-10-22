@@ -1,8 +1,8 @@
 /**
  * @file 磁贴布局能力（对标 react-grid-layout 与 gridstack）：拖动或调整尺寸时按网格对齐，碰到的磁贴被推开，空隙按方向紧凑。
  *
- * 布局计算在 core 的 `place`、`settle` 里完成，不碰 DOM；这里负责把格子换算成像素、经各磁贴的
- * `View` 渲染、显示占位框，以及 `sizing: "content"` 时按内容量出行数。
+ * 布局计算在 core 的 {@link place}、{@link settle} 里完成，不碰 DOM；这里负责把格子换算成像素、经各磁贴的
+ * {@link View} 渲染、显示占位框，以及 `sizing: "content"` 时按内容量出行数。
  * 磁贴须绝对定位在容器左上（`position: absolute; left: 0; top: 0`），容器高度随布局自动调整。
  */
 
@@ -51,34 +51,50 @@ import type { ListOptions } from "./sortable";
 /**
  * {@link Tileable} 的选项；另含 {@link ListOptions}，以及 {@link Tiling} 的 `rows`（行数上限，超出的移动被拒绝）、
  * `compact`（紧凑方向，缺省 `"vertical"`）与 `collision`（碰撞策略，缺省 `"push"`）。
+ *
+ * 网格结构相关的选项（`items`、`handles`、`sizing`、`columns`、`rowHeight`、`gap`、`rows`、`compact`、
+ * `collision`）变化时重建，其余就地生效。
  */
 export interface TileableOptions extends ListOptions, Omit<Tiling, "columns"> {
-  /** 每个磁贴的调整尺寸手柄；缺省自动生成一个，`sizing` 为 `"fixed"` 时在右下角，为 `"content"` 时在右边缘。 */
+  /**
+   * 每个磁贴的调整尺寸手柄，返回手柄元素到方向的映射；缺省自动生成一个（{@link grips}），
+   * `sizing` 为 `"fixed"` 时在右下角，为 `"content"` 时在右边缘中点（只调宽度），重建或销毁时移除。
+   */
   readonly handles?: (item: HTMLElement) => ReadonlyMap<Element, Handle>;
   /**
-   * 列数。
+   * 列数；列宽由容器宽度均分（扣除间距）得到。
+   *
    * @default 12
    */
   readonly columns?: number;
   /**
    * 行高（像素）。
+   *
    * @default 80
    */
   readonly rowHeight?: number;
   /**
-   * 磁贴之间的间距（像素）。
+   * 磁贴之间的间距（像素），横向与纵向相同；容器四周不留间距。
+   *
    * @default 10
    */
   readonly gap?: number;
   /**
    * 内容比磁贴高时怎么办：`"fixed"` 尺寸只由网格决定，内容在磁贴里滚动；
    * `"content"` 高度随内容自适应，`tile` 与 `move` 给的高度不再生效。
+   *
    * @default "fixed"
    */
   readonly sizing?: "fixed" | "content";
-  /** 新磁贴的初始格子：可给 `x`、`y`、`width`、`height`、`fixed`；缺 `x`、`y` 时放到第一个空位，宽高缺省 1。 */
+  /**
+   * 新磁贴的初始格子：可给 `x`、`y`、`width`、`height`、`fixed`；缺 `x` 或 `y` 时放到第一个空位
+   * （{@link vacant}），宽高缺省 1。只在磁贴首次加入布局时调用，`index` 为它在条目中的 DOM 序号。
+   */
   readonly tile?: (item: HTMLElement, index: number) => Partial<Tile>;
-  /** 布局提交后、确有变化时调用；初始布局不触发，读 `layout`。 */
+  /**
+   * 布局提交后、确有变化时调用（拖动或调整尺寸松手、`move()`、内容高度变化、重建）；
+   * 初始布局不触发，读 `layout`。
+   */
   readonly onLayout?: (layout: Layout<HTMLElement>) => void;
 }
 
@@ -92,7 +108,13 @@ interface Pitch {
   readonly gap: number;
 }
 
-/** 把格子换算成容器空间的像素位置与尺寸。 */
+/**
+ * 把格子换算成容器空间的像素位置与尺寸。
+ *
+ * @param tile 格子。
+ * @param pitch 网格节距。
+ * @returns 左上角与宽高（像素）；宽高为占用的节距总和减去一份间距。
+ */
 const pixels = (tile: Tile, pitch: Pitch) => ({
   left: tile.x * pitch.x,
   top: tile.y * pitch.y,
@@ -100,7 +122,13 @@ const pixels = (tile: Tile, pitch: Pitch) => ({
   height: tile.height * pitch.y - pitch.gap,
 });
 
-/** 磁贴在格子里时的状态补丁：平移到格子左上，尺寸为格子像素尺寸。 */
+/**
+ * 磁贴在格子里时的状态补丁：平移到格子左上，尺寸为格子像素尺寸。
+ *
+ * @param tile 格子。
+ * @param pitch 网格节距。
+ * @returns 写入磁贴状态的补丁，矩阵只含平移。
+ */
 function patch(tile: Tile, pitch: Pitch): Patch {
   const { left, top, width, height } = pixels(tile, pitch);
   return { matrix: plane.translate(left, top), size: { width, height } };
@@ -109,12 +137,15 @@ function patch(tile: Tile, pitch: Pitch): Patch {
 /**
  * 把跟随指针的状态吸附到最近的格子：起止边分别取整到节距（终边补上间距），至少占一格。
  *
+ * 只读矩阵的平移分量，磁贴不应带旋转或缩放。
+ *
  * @param state 当前候选状态，容器空间。
  * @param tile 当前格子，保留 `fixed` 等其余字段。
  * @param pitch 网格节距。
- * @returns 吸附后的格子。
+ * @returns 吸附后的格子，尚未夹进网格。
  */
 function cell(state: State, tile: Tile, pitch: Pitch): Tile {
+  /** 一维吸附：起边与补上间距的终边分别取整到节距，得到起始格与格数（至少 1）。 */
   const span = (start: number, length: number, step: number) => {
     const first = Math.round(start / step);
     const last = Math.round((start + length + pitch.gap) / step);
@@ -132,10 +163,15 @@ function cell(state: State, tile: Tile, pitch: Pitch): Tile {
   };
 }
 
-/** 创建占位框：标出被拖磁贴将落入的格子，带 `data-layer`，颜色取 CSS 变量 `--placeholder`。 */
+/**
+ * 创建占位框：标出被拖磁贴将落入的格子，带 `data-layer`，颜色取 CSS 变量 `--placeholder`。
+ *
+ * @param container 网格容器，占位框作为最后一个子元素插入，不拦截指针。
+ * @returns 占位框元素，会话结束或取消时移除。
+ */
 function placeholder(container: HTMLElement): HTMLElement {
   const element = container.ownerDocument.createElement("div");
-  element.dataset["layer"] = "placeholder";
+  element.dataset.layer = "placeholder";
   Object.assign(element.style, {
     position: "absolute",
     left: "0",
@@ -148,7 +184,13 @@ function placeholder(container: HTMLElement): HTMLElement {
   return element;
 }
 
-/** 把占位框摆到格子上。 */
+/**
+ * 把占位框摆到格子上：写内联 `left`、`top`、`width`、`height`。
+ *
+ * @param element 占位框。
+ * @param tile 目标格子。
+ * @param pitch 网格节距。
+ */
 function cover(element: HTMLElement, tile: Tile, pitch: Pitch): void {
   const { left, top, width, height } = pixels(tile, pitch);
   Object.assign(element.style, {
@@ -178,6 +220,10 @@ const none: readonly Element[] = [];
 /**
  * 变动是否影响磁贴的内容：磁贴内部的任何变动都算，磁贴自身的 `style` 除外，
  * 那是渲染与测量写入的，不代表内容变化。
+ *
+ * @param item 磁贴。
+ * @param record 一条变动记录。
+ * @returns 变动发生在磁贴内部且不是磁贴自身的 `style` 属性时为 `true`。
  */
 const affects = (
   item: HTMLElement,
@@ -188,8 +234,12 @@ const affects = (
 /**
  * 磁贴布局：每个磁贴一份平移绑定与若干调整尺寸绑定，拖动时实时预览推开与紧凑的结果，松手提交。
  *
- * 拖动时磁贴跟随指针，占位框标出目标格子，其余磁贴以 FLIP 过渡到预览位置；松手后磁贴吸附到格子。
- * 方向键按格移动。固定磁贴（`fixed`）不绑定，也不会被推开。容器宽度变化时按新的节距重建。
+ * 拖动时磁贴跟随指针，占位框标出目标格子，其余磁贴以 FLIP 过渡到预览位置；松手后磁贴吸附到格子，
+ * 取消时整体回到起点布局。方向键按格移动（Shift 为 10 格），键盘移动时磁贴直接吸到预览格子上。
+ * 调整尺寸的下限为一格、宽度上限为容器宽度。固定磁贴（`fixed`）不绑定，也不会被推开。
+ * 容器宽度变化时按新的节距重建；增删磁贴后调用 `refresh()`。
+ *
+ * 平移绑定的插件为用户插件 → lift → track，调整尺寸绑定为用户插件 → 尺寸上下限 → lift → track。
  *
  * @example
  * const tiles = new Tileable(grid, {
@@ -206,13 +256,15 @@ export class Tileable extends Capability<
 > {
   /** 每个绑定的选项工厂，就地更新时重新求值；重建时清空。 */
   readonly #configs = new Map<Binding, () => BindOptions>();
-  /** 当前已提交的布局。 */
+  /** 当前已提交的布局；只整体替换，从不就地修改。 */
   #layout: Layout<HTMLElement> = new Map();
-  /** 会话进行中的占位框。 */
+  /** 会话进行中的占位框；没有会话时为 `undefined`。 */
   #placeholder: HTMLElement | undefined;
 
   /**
-   * @param container 网格容器，磁贴默认是它的直接子元素。
+   * 把容器变成磁贴网格：收集磁贴，整理并提交初始布局，再为每个磁贴创建绑定。
+   *
+   * @param container 网格容器，磁贴默认是它的直接子元素；高度由布局决定。
    * @param options 磁贴布局选项。
    */
   constructor(container: HTMLElement, options: TileableOptions = {}) {
@@ -220,21 +272,22 @@ export class Tileable extends Capability<
     this.refresh();
   }
 
-  /** 当前磁贴，按 DOM 顺序；覆盖层不计入。 */
+  /** 当前磁贴，按 DOM 顺序；覆盖层不计入。每次读取都重新查询。 */
   get items(): HTMLElement[] {
     return query(this.node, this.options.items);
   }
 
-  /** 当前布局：磁贴到格子。 */
+  /** 当前已提交的布局：磁贴到格子；只读，提交时整体替换。会话中的预览不在其中。 */
   get layout(): Layout<HTMLElement> {
     return this.#layout;
   }
 
   /**
-   * 程序化移动磁贴或改尺寸：按碰撞策略推开并紧凑后提交；会话进行中或被拒绝时不变。
+   * 程序化移动磁贴或改尺寸：按碰撞策略推开并紧凑后提交；会话进行中、磁贴不在布局里、
+   * 磁贴固定或被拒绝（与固定磁贴重叠、`collision: "block"` 时重叠、超出 `rows`）时不变。
    *
    * @param item 磁贴。
-   * @param tile 要改的格子字段。
+   * @param tile 要改的格子字段，未给的沿用当前值。
    * @returns 能力本身，便于链式调用。
    */
   move(item: HTMLElement, tile: Partial<Tile>): this {
@@ -255,6 +308,8 @@ export class Tileable extends Capability<
    *
    * 已有磁贴保留原格子，新磁贴取 `tile` 给的初始格子；容器宽度变化时整体重建，
    * 销毁时恢复容器原来的内联高度。
+   *
+   * @returns 各磁贴的绑定，以及清理函数：移除自动手柄、停止内容与尺寸监听、还原容器高度。
    */
   protected build(): readonly Part<Binding>[] {
     const { node } = this;
@@ -300,6 +355,7 @@ export class Tileable extends Capability<
   #watch(): (() => void)[] {
     if (this.options.sizing !== "content") return [];
     const { node } = this;
+    /** 重新量高 `changed` 选中的磁贴，布局有变化才提交；会话进行中跳过。 */
     const refit = (changed: (item: HTMLElement) => boolean) => {
       if (this.active) return;
       const items = this.items.filter(changed);
@@ -309,6 +365,7 @@ export class Tileable extends Capability<
     const observer = new MutationObserver((records) =>
       refit((item) => records.some((record) => affects(item, record))),
     );
+    /** 资源加载完成：只重新量包含加载目标的磁贴。 */
     const load = ({ target }: Event) =>
       refit((item) => target instanceof Node && item.contains(target));
     observer.observe(node, {
@@ -327,7 +384,7 @@ export class Tileable extends Capability<
   /**
    * `sizing: "content"` 时把磁贴高度换成放下内容所需的最少行数，再整体紧凑。
    *
-   * 自然高度 `h` 由 `intrinsic` 在磁贴宽度下量出，行数为 `⌈(h + gap) / (rowHeight + gap)⌉`；
+   * 自然高度 `h` 由 {@link intrinsic} 在磁贴宽度下量出，行数为 `⌈(h + gap) / (rowHeight + gap)⌉`；
    * 固定磁贴保持声明的尺寸，超出 `rows` 时放弃本次调整。
    *
    * @param layout 待调整的布局。
@@ -356,7 +413,12 @@ export class Tileable extends Capability<
     return within ? result : layout;
   }
 
-  /** 由选项得到布局引擎的参数，补上缺省值。 */
+  /**
+   * 由选项得到布局引擎的参数，补上缺省值。
+   *
+   * @returns 布局规则：`columns` 缺省 12，`compact` 缺省 `"vertical"`，`collision` 缺省 `"push"`，
+   *   `rows` 只在给出时带上。
+   */
   #tiling(): Tiling {
     const {
       columns = 12,
@@ -372,14 +434,22 @@ export class Tileable extends Capability<
     };
   }
 
-  /** 由容器当前宽度求节距：列宽为（容器宽度 − 间距总和）÷ 列数。 */
+  /**
+   * 由容器当前宽度求节距：列宽为（容器宽度 − 间距总和）÷ 列数。
+   *
+   * @returns 当前节距：列节距为列宽加间距，行节距为行高加间距。
+   */
   #pitch(): Pitch {
     const { columns = 12, rowHeight = 80, gap = 10 } = this.options;
     const column = (this.node.clientWidth - gap * (columns - 1)) / columns;
     return { x: column + gap, y: rowHeight + gap, gap };
   }
 
-  /** 收集当前磁贴的格子：已在布局里的沿用，新磁贴取 `tile` 给的格子，缺位置时放到第一个空位。 */
+  /**
+   * 收集当前磁贴的格子：已在布局里的沿用，新磁贴取 `tile` 给的格子，缺位置时放到第一个空位。
+   *
+   * @returns 按 DOM 顺序收集的布局，尚未整理，可能越界或重叠，交给 {@link settle}。
+   */
   #collect(): Layout<HTMLElement> {
     const { columns } = this.#tiling();
     const layout = new Map<HTMLElement, Tile>();
@@ -410,6 +480,10 @@ export class Tileable extends Capability<
    *
    * 选项以工厂登记进 `#configs`，就地更新时重新求值；按键为按格移动的方向键，
    * 尺寸下限一格、上限为容器宽度。自动生成的手柄在重建或销毁时移除。
+   *
+   * @param item 磁贴。
+   * @param pitch 建立绑定时的网格节距；节距随容器宽度变化时整体重建。
+   * @returns 平移绑定、各手柄的调整尺寸绑定，以及移除自动手柄的清理函数；固定磁贴为空。
    */
   #bind(item: HTMLElement, pitch: Pitch): Part<Binding>[] {
     if (this.#layout.get(item)?.fixed) return [];
@@ -422,11 +496,13 @@ export class Tileable extends Capability<
       width: { min: pitch.x - pitch.gap, max: this.node.clientWidth },
       height: { min: pitch.y - pitch.gap },
     });
+    /** 用选项工厂创建绑定并登记，就地更新时重新求值。 */
     const link = (config: () => BindOptions): Binding => {
       const binding = bind(item, config());
       this.#configs.set(binding, config);
       return binding;
     };
+    /** 读取最新的用户插件。 */
     const plugins = () => this.options.plugins ?? [];
     const drag = link(() => ({
       activation: deliberate,
@@ -459,17 +535,23 @@ export class Tileable extends Capability<
    * 跟踪一次拖动或调整尺寸：磁贴本身跟随指针，吸附到的格子变化时在预览布局里放置并推开，
    * 渲染其余磁贴与占位框；键盘输入时把状态直接吸到预览格子上。
    * 松手提交预览，取消提交起点布局。
+   *
+   * @param item 被拖动或调整尺寸的磁贴。
+   * @param pitch 网格节距。
+   * @returns 实现 `onStart`、`onMove`、`onEnd` 与 `onCancel` 的插件。
    */
   #track(item: HTMLElement, pitch: Pitch): Plugin {
     let origin = this.#layout;
     let preview = origin;
     let target: Tile | undefined;
+    /** 收尾：移除占位框，提交给定布局（结束时为预览，取消时为起点）。 */
     const finish = (layout: Layout<HTMLElement>) => {
       this.#placeholder?.remove();
       this.#placeholder = undefined;
       this.#commit(layout);
     };
     return {
+      /** 记下起点布局，并在磁贴当前的格子上放出占位框。 */
       onStart: () => {
         origin = this.#layout;
         preview = origin;
@@ -477,6 +559,10 @@ export class Tileable extends Capability<
         this.#placeholder = placeholder(this.node);
         if (target) cover(this.#placeholder, target, pitch);
       },
+      /**
+       * 吸附到的格子变了才重新放置：被拒绝或结果不变时保留上一份预览。指针输入时不修改候选，
+       * 磁贴照常跟随指针；键盘输入时把候选吸到预览格子上。
+       */
       onMove: ({ state, input }) => {
         const current = preview.get(item);
         if (!current) return undefined;
@@ -499,7 +585,12 @@ export class Tileable extends Capability<
     };
   }
 
-  /** 渲染预览布局：被拖磁贴除外，它跟随指针；占位框摆到它的目标格子上。 */
+  /**
+   * 渲染预览布局：被拖磁贴除外，它跟随指针；占位框摆到它的目标格子上。
+   *
+   * @param layout 预览布局。
+   * @param active 被拖动或调整尺寸的磁贴。
+   */
   #show(layout: Layout<HTMLElement>, active: HTMLElement): void {
     const pitch = this.#pitch();
     this.#render(layout, pitch, active);
@@ -507,7 +598,11 @@ export class Tileable extends Capability<
     if (this.#placeholder && tile) cover(this.#placeholder, tile, pitch);
   }
 
-  /** 提交布局：渲染全部磁贴并记下；布局确有变化且不是初始布局时派发 `onLayout`。 */
+  /**
+   * 提交布局：渲染全部磁贴并记下；布局确有变化且不是初始布局时派发 `onLayout`。
+   *
+   * @param layout 要提交的布局。
+   */
   #commit(layout: Layout<HTMLElement>): void {
     const previous = this.#layout;
     this.#render(layout, this.#pitch());

@@ -11,7 +11,8 @@ import type { Plugin } from "../core";
 /**
  * 创建角度吸附插件：能旋转时把矩阵的旋转角取整到 `step` 的整数倍。
  *
- * 当前角度取自矩阵线性部分 `atan2(b, a)`，与目标角度的差值绕 `anchor` 补转，旋转中心因此不跳；
+ * 当前角度取自矩阵线性部分 `atan2(b, a)`（容器空间里相对 x 轴的角度，屏幕上顺时针为正），
+ * 四舍五入到最近的 `step` 倍数；与目标角度的差值绕 `anchor` 左乘补转，旋转中心因此不跳。
  * 动作不允许旋转（`freedom.rotate` 为假）时不做任何处理。
  *
  * @param step 吸附步长，单位为弧度，须为有限正数。
@@ -28,6 +29,7 @@ export function angle(step: number): Plugin {
     throw new RangeError(`expected a positive step, received ${step}`);
   }
   return {
+    /** 求出离当前角度最近的步长倍数，绕锚点补转差值。 */
     onMove: ({ state, anchor, action: { freedom } }) => {
       if (!freedom.rotate) return undefined;
       const [a, b] = state.matrix;

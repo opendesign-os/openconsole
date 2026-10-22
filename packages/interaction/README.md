@@ -62,7 +62,7 @@ new Resizable(card, { container: board, width: { min: 60 } }); // 自动生成 8
 ```
 
 自定义手柄用 `Rotatable` 的 `handle` 与 `Resizable` 的 `handles: Map<Element, Handle>`;自动生成的手柄带 `data-layer="grip"`,
-颜色取 CSS 变量 `--grip`。
+颜色取 CSS 变量 `--grip`。手柄绝对定位在节点里,静态定位的节点会被改为 `position: relative`,能力全部销毁后还原。
 
 ### 平移缩放
 
@@ -243,10 +243,10 @@ if (state) drag.assign(state);
 interface Plugin {
   onAttach?(context: { state }): void;
   onStart?(context: Context): void;
-  onMove?(context: Context): State | void; // 返回状态即替换候选
+  onMove?(context: Context): State | undefined; // 返回状态即替换候选,返回 undefined 不修改
   onEnd?(context: Context): void;
   onCancel?(context: Context): void;
-  onChange?(context: { state }): void; // 每次提交后一次:移动、nudge、帧、assign、cancel
+  onChange?(context: { state }): void; // 每次提交后一次:移动、nudge、帧、release、assign、cancel
   // onCancel 被调用时状态已回到起点,插件可以在此基础上再写入
   onCommit?(operation: Operation): void; // 会话改变了状态时,在 onEnd 之后调用一次
   onDetach?(): void;
@@ -488,7 +488,8 @@ canvas.addEventListener("pointerup", () => tracker.end());
   为 `"content"` 时在右边缘。`sizing` 为 `"content"` 时 `tile` 与 `move` 给的高度不生效,固定磁贴保持声明的尺寸,
   超出 `rows` 时不再增高
 - `Nestable` 的 `zones` 为当前区域,`items(zone)` 为区域里的组件,`move(item, zone, index)` 程序化移动;拖动时显示插入线,
-  松手才移动 DOM,随后组件回到文档流;`onSort` 的 `from` 对新建组件是它在面板里的位置
+  松手才移动 DOM,随后组件回到文档流;`onSort` 的 `from` 对新建组件是它在面板里的位置。插入位次按区域在屏幕上的
+  排列顺序求:支持 flex 的四个方向与换行、多列 grid 与 RTL,其他布局按纵向列表处理
 - `Droppable` 的 `detect(zone, drag)` 返回分数或 `undefined`;命中多个时最内层优先,其次分数高者。`zone` 为
   `{ element, shape }`,`shape` 是区域在屏幕上的多边形;`drag.point` 为指针,没有指针(键盘)时为被拖元素的中心;
   `drag.shape` 为被拖元素在屏幕上的多边形

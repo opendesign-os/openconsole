@@ -3,6 +3,7 @@
  *
  * 指针、键盘、滚轮以及自定义输入都实现 {@link Sensor}：绑定为每个句柄与排除区调用一次，
  * 输入源把原生事件换算成 {@link Input} 或 `Step`，再调用 {@link Control} 的方法驱动会话。
+ * 输入源只认识屏幕坐标（`clientX/clientY`），换算到容器空间由绑定负责。
  */
 
 import type { Point } from "@openconsole/matrix";
@@ -11,21 +12,29 @@ import type { Action, Input, Step } from "../core";
 import type { State } from "../model";
 
 /**
- * 指针会话的起动条件。
+ * 指针会话的起动条件，决定按下之后何时真正开始会话。
  *
- * 给出 `delay` 时为长按：按住 `delay` 毫秒且移动不超过 `tolerance` 才开始，超出即放弃这次按下；
- * 否则移动达到 `distance` 就开始。距离都是屏幕像素。
+ * 给出 `delay` 时为长按：按住 `delay` 毫秒且移动不超过 `tolerance` 才开始，超出即放弃这次按下，
+ * 此时忽略 `distance`；否则移动达到 `distance` 就开始。距离都是相对首次按下点的屏幕像素（直线距离）。
+ * 内置指针输入源还按触屏的条件设置句柄的 `touch-action`：长按起动为 `manipulation`（保留页面滚动），
+ * 否则为 `none`。
+ *
+ * @example
+ * const mouse: Activation = { distance: 3 }; // 移动 3px 后开始，点击不会误触拖动
+ * const touch: Activation = { delay: 250, tolerance: 5 }; // 长按 250ms，期间抖动不超过 5px
  */
 export interface Activation {
   /**
-   * 起动前需要移动的距离（屏幕像素）。
+   * 起动前需要移动的距离（屏幕像素）；为 0 时按下后第一次移动就开始。给出 `delay` 时不生效。
+   *
    * @default 0
    */
   readonly distance?: number;
-  /** 长按时长（毫秒）；给出时改为长按起动。 */
+  /** 长按时长（毫秒）；给出时改为长按起动，计时从按下开始。 */
   readonly delay?: number;
   /**
-   * 长按期间允许的移动距离（屏幕像素），超出即放弃这次按下。
+   * 长按期间允许的移动距离（屏幕像素），超出即放弃这次按下；只在给出 `delay` 时生效。
+   *
    * @default 0
    */
   readonly tolerance?: number;
@@ -34,14 +43,26 @@ export interface Activation {
 /**
  * 键盘映射的值：直接给出的 `Step`，或按当前状态计算 `Step` 的函数。
  *
- * 函数返回 `undefined` 时这次按键不移动（例如排序已到列表两端）。
+ * 函数收到绑定的当前状态（容器空间），返回 `undefined` 时这次按键不移动（例如排序已到列表两端），
+ * 但按键的默认行为仍会被阻止。
+ *
+ * @example
+ * const right: Key = { matrix: plane.translate(10, 0), space: "container" };
+ * const spin: Key = () => ({ matrix: plane.rotate(Math.PI / 12), space: "local" });
  */
 export type Key = Step | ((state: State) => Step | undefined);
 
 /**
  * 键盘映射：键名（`event.key`）或 `Shift+键名` → {@link Key}。
  *
- * 按住 Shift 时先查 `Shift+键名`，没有再回退到不带修饰的键名。
+ * 按住 Shift 时先查 `Shift+键名`，没有再回退到不带修饰的键名；其他修饰键不参与匹配。
+ * 会话中 Space、Enter 固定用于放下，Escape 固定用于取消，不会查表。
+ *
+ * @example
+ * const keys: Keys = {
+ *   ArrowRight: { matrix: plane.translate(1, 0), space: "container" },
+ *   "Shift+ArrowRight": { matrix: plane.translate(10, 0), space: "container" },
+ * };
  */
 export type Keys = Readonly<Record<string, Key>>;
 
@@ -49,67 +70,75 @@ export type Keys = Readonly<Record<string, Key>>;
  * 输入源可以驱动的对象，即 `Binding`。
  *
  * 输入源只通过这组方法开始、推进与结束会话；`keys`、`activation` 是内置键盘与指针输入源读取的配置。
+ * 一次会话的调用顺序为 `start` → 若干次 `move`/`nudge` → `end` 或 `cancel`；`start` 返回 `false`
+ * 时会话没有开始，后续调用都会被忽略。
  */
 export interface Control {
   /** 被变换的节点。 */
   readonly node: HTMLElement;
-  /** 当前状态（容器空间）。 */
+  /** 当前状态（容器空间）；键盘映射的函数值据此计算 `Step`。 */
   readonly state: State;
-  /** 当前动作；指针输入源据其自由度决定最多接受几根手指。 */
+  /** 当前动作；指针输入源据其自由度决定最多接受几根手指（能旋转或缩放时为 2）。 */
   readonly action: Action;
-  /** 键盘映射；为空时键盘输入源不挂载。 */
+  /** 键盘映射；为空时键盘输入源不挂载，元素也不会因此获得 Tab 停留点。 */
   readonly keys: Keys;
   /**
    * 按指针类型取起动条件。
+   *
    * @param type `PointerEvent.pointerType`，如 `"mouse"`、`"touch"`、`"pen"`。
    * @returns 该指针类型的起动条件。
    */
   activation(type: string): Activation;
   /**
    * 开始会话。
-   * @param input 起点输入，点为屏幕坐标。
-   * @returns 是否开始；节点已有会话、被同一节点上的其他绑定锁住或无法测量时为 `false`。
+   *
+   * @param input 起点输入，点为屏幕坐标；键盘、滚轮起动时没有点。
+   * @returns 是否开始；节点已有会话、被同一节点上的其他绑定锁住或无法测量时为 `false`，
+   *   输入源应放弃这次输入。
    */
   start(input: Input): boolean;
   /**
-   * 按输入点推进会话。
-   * @param input 当前输入，点为屏幕坐标。
+   * 按输入点推进会话，每次都从段起点整体求解；没有会话或已松手时忽略。
+   *
+   * @param input 当前输入，点为屏幕坐标；点数变化（多指按下或抬起）时自动重新取段起点。
    */
   move(input: Input): void;
   /**
-   * 以一步离散变换推进会话，用于键盘与滚轮。
+   * 以一步离散变换推进会话，用于键盘与滚轮；作用在约束之后的当前状态上，没有会话或已松手时忽略。
+   *
    * @param step 一次直接给出的变换及其所在空间。
    */
   nudge(step: Step): void;
   /**
-   * 结束会话；插件仍在动画时继续出帧，停下后才真正结束。
-   * @param input 结束时的输入，可省略。
+   * 结束会话；插件仍在动画时继续出帧，停下后才真正结束并触发 `onEnd`、`onCommit`。
+   *
+   * @param input 结束时的输入，可省略；带点时记为最近一次输入。
    */
   end(input?: Input): void;
-  /** 取消会话，状态回到起点。 */
+  /** 取消会话，状态回到起点；没有会话时忽略。 */
   cancel(): void;
 }
 
 /**
  * 一个句柄或排除区标记。
  *
- * 沿事件路径由内向外，同一绑定上最内层的标记生效，外层标记 `priority` 更高时覆盖内层；
+ * 沿事件路径由内向外，同一绑定上最内层的标记生效，外层标记 `priority` 严格更高时覆盖内层；
  * 排除区只阻止起动，键盘、滚轮等输入源只挂在句柄上。
  */
 export interface Mark {
-  /** 被标记的元素。 */
+  /** 被标记的元素，不必是被变换的节点本身（例如标题栏句柄）。 */
   readonly element: Element;
-  /** `"handle"` 允许从这里按下起动，`"ignore"` 禁止。 */
+  /** `"handle"` 允许从这里按下起动，`"ignore"` 禁止，按下交给外层绑定。 */
   readonly kind: "handle" | "ignore";
-  /** 优先级，越大越优先；也决定同一元素上多个绑定的先后。 */
+  /** 优先级，越大越优先；同一元素上登记了多个绑定的句柄时，按它从高到低依次尝试。 */
   readonly priority: number;
 }
 
 /**
  * 输入源：为一个标记挂载监听，把原生事件换算后调用 `control` 的方法。
  *
- * 绑定对每个句柄与排除区各调用一次；不关心该标记时返回 `undefined`，
- * 否则返回清理函数，在标记注销或输入源重挂时调用。
+ * 绑定对每个句柄与排除区（含没有句柄时的隐式句柄）各调用一次；不关心该标记时返回 `undefined`，
+ * 否则返回清理函数，在标记注销、输入源重挂或绑定销毁时调用，负责摘除它挂上的监听。
  *
  * @example
  * const remote: Sensor = (control, { element, kind }) => {
@@ -124,9 +153,16 @@ export type Sensor = (control: Control, mark: Mark) => (() => void) | undefined;
 
 /**
  * 把鼠标、指针或键盘事件换算成 {@link Input}。
- * @param event 原生事件，提供修饰键与时间戳。
- * @param points 屏幕坐标下的输入点；键盘输入为空。
- * @returns 带修饰键、原生事件与 `timeStamp` 的输入。
+ *
+ * 点原样复制成数组，不做坐标换算；修饰键取自事件，时间戳取 `event.timeStamp`（毫秒）。
+ *
+ * @param event 原生事件，提供修饰键与时间戳，并作为 `input.event` 交给插件。
+ * @param points 屏幕坐标下的输入点，可为任意可迭代对象（如 `Map.values()`）；缺省为空，键盘输入即如此。
+ * @returns 带修饰键、原生事件与时间戳的输入。
+ * @example
+ * element.addEventListener("pointermove", (event) => {
+ *   control.move(input(event, [{ x: event.clientX, y: event.clientY }]));
+ * });
  */
 export const input = (
   event: MouseEvent | KeyboardEvent,

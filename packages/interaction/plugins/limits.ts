@@ -19,6 +19,13 @@ export interface Limits {
   readonly scale?: Range;
 }
 
+/**
+ * 把数值夹进范围，缺少的一端不限制。
+ *
+ * @param value 原值。
+ * @param range 范围；缺省为 `{}`，即不限制。
+ * @returns 夹进 `[min, max]` 后的值；`min` 大于 `max` 时结果为 `max`。
+ */
 const clamp = (value: number, range: Range = {}): number =>
   Math.min(Math.max(value, range.min ?? -Infinity), range.max ?? Infinity);
 
@@ -26,7 +33,9 @@ const clamp = (value: number, range: Range = {}): number =>
  * 创建上下限插件，按自由度分别处理尺寸与缩放。
  *
  * - 调整尺寸：只夹移动边所在轴的宽或高；对边钉住由流水线最后的再投影完成，节点不会离开钉住的边。
- * - 能缩放：当前倍数取矩阵第一列的长度，超出范围时绕 `anchor`（容器空间）补缩放。
+ * - 能缩放：当前倍数取矩阵第一列的长度 `hypot(a, b)`，即节点相对容器空间的缩放（不含祖先的变换），
+ *   超出范围时绕 `anchor`（容器空间）补缩放；倍数为 0 时不处理。
+ * - 两者都不涉及时原样返回候选。
  *
  * @param options 宽、高与缩放倍数的范围。
  * @returns 只实现 `onMove` 的插件。
@@ -38,6 +47,7 @@ const clamp = (value: number, range: Range = {}): number =>
  */
 export function limits(options: Limits): Plugin {
   return {
+    /** 先夹移动轴的宽高，再按需绕锚点把缩放倍数补到范围内。 */
     onMove: ({ state, anchor, action: { freedom } }) => {
       let next = state;
       if (resizes(freedom)) {

@@ -2,7 +2,8 @@
  * @file DOM 测量：读出节点的线性变换、尺寸、布局偏移与屏幕多边形，必要时写回尺寸。
  *
  * 涉及三种空间：屏幕坐标（client）、容器空间（offsetParent 内边距盒，左上为原点）、
- * 局部空间（节点边框盒，左上为原点）。
+ * 局部空间（节点边框盒，左上为原点）。读计算样式与几何属性都会触发同步布局，
+ * 调用方应避免在读写之间交错。
  */
 
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
@@ -20,12 +21,20 @@ import { local, type Computed } from "./style";
 /** 尺寸轴：选择宽或高方向的内边距、边框与 `min-*`、`max-*`。 */
 type Axis = "width" | "height";
 
-/** 把计算样式里的像素值（如 `"12.5px"`）解析成数字；无法解析时为 0。 */
+/**
+ * 把计算样式里的像素值解析成数字。
+ *
+ * @param value 计算值，如 `"12.5px"`。
+ * @returns 像素数；无法解析（如 `"auto"`、空串）时为 0。
+ */
 const pixels = (value: string): number => Number.parseFloat(value) || 0;
 
 /**
  * 沿渲染树取上一级：被分配进 slot 的元素取 slot，shadow root 下的顶层元素取宿主，
- * 其余取父元素；到达根部时为 null。
+ * 其余取父元素。
+ *
+ * @param element 当前元素。
+ * @returns 渲染树上的上一级元素；到达根部时为 `null`。
  */
 function parent(element: Element): Element | null {
   if (element.assignedSlot) return element.assignedSlot;
@@ -126,7 +135,11 @@ export function computed(node: Element): Computed {
 }
 
 /**
- * 该轴上计算样式宽高与边框盒之间的差：`content-box` 时为内边距加边框，`border-box` 时为 0。
+ * 求该轴上计算样式宽高与边框盒之间的差，用于在 `width`/`height` 与边框盒尺寸之间换算。
+ *
+ * @param style 节点的计算样式。
+ * @param axis `"width"` 取左右，`"height"` 取上下。
+ * @returns `content-box` 时为两侧内边距加边框（像素），`border-box` 时为 0。
  */
 function inset(style: CSSStyleDeclaration, axis: Axis): number {
   if (style.boxSizing === "border-box") return 0;
@@ -188,8 +201,14 @@ export function intrinsic(node: HTMLElement, width: number): number {
 }
 
 /**
- * 节点局部空间到屏幕坐标的仿射矩阵：线性部分取祖先链与自身变换，平移由屏幕包围盒中心反推
- * （同 core 的 `frame`）。矩阵不可逆（如缩放为 0）时为 undefined。
+ * 求节点局部空间到屏幕坐标的仿射矩阵。
+ *
+ * 线性部分取祖先链与自身变换的乘积，平移由屏幕包围盒中心反推（同 core 的 `frame`，
+ * 把节点自身当作以单位矩阵摆放、尺寸为 `box` 的状态）。
+ *
+ * @param node 要测量的节点。
+ * @param box 节点边框盒宽高（像素）。
+ * @returns 局部空间 → 屏幕坐标的矩阵；变换不可逆（如缩放为 0）时为 `undefined`。
  */
 function pose(node: HTMLElement, box: Size): Matrix<2, "affine"> | undefined {
   const inverse = frame(plane.multiply(linear(node), own(node)), rect(node), {

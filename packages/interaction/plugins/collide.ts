@@ -24,24 +24,59 @@ interface Hit {
   readonly normal: Point<2>;
 }
 
+/**
+ * 两个向量的点积。
+ *
+ * @param left 左向量。
+ * @param right 右向量。
+ * @returns `left·right`；`right` 为单位向量时即 `left` 在其方向上的投影长度。
+ */
 const dot = (left: Point<2>, right: Point<2>): number =>
   left.x * right.x + left.y * right.y;
 
+/**
+ * 向量数乘。
+ *
+ * @param vector 向量。
+ * @param factor 系数。
+ * @returns 新向量 `vector·factor`。
+ */
 const times = (vector: Point<2>, factor: number): Point<2> => ({
   x: vector.x * factor,
   y: vector.y * factor,
 });
 
-/** 去掉 `vector` 沿单位法线 `normal` 的分量，得到沿接触面的切向分量。 */
+/**
+ * 去掉 `vector` 沿单位法线 `normal` 的分量，得到沿接触面的切向分量。
+ *
+ * @param vector 剩余位移。
+ * @param normal 接触面的单位法线。
+ * @returns 切向分量，即 `vector − (vector·normal)·normal`。
+ */
 function tangent(vector: Point<2>, normal: Point<2>): Point<2> {
   const depth = dot(vector, normal);
   return { x: vector.x - depth * normal.x, y: vector.y - depth * normal.y };
 }
 
+/**
+ * 线性插值。
+ *
+ * @param from 起点值，`ratio` 为 0 时取它。
+ * @param to 终点值，`ratio` 为 1 时取它。
+ * @param ratio 比例。
+ * @returns `from + (to − from)·ratio`。
+ */
 const mix = (from: number, to: number, ratio: number): number =>
   from + (to - from) * ratio;
 
-/** 多边形各条边的单位法线，作为分离轴；零长的边跳过。 */
+/**
+ * 多边形各条边的单位法线，作为分离轴；零长的边跳过。
+ *
+ * 法线由边向量 `(dx, dy)` 转成 `(dy, −dx)` 再归一化；SAT 只关心轴的方向，与顶点顺时针还是逆时针无关。
+ *
+ * @param polygon 凸多边形。
+ * @returns 每条非零长边一条单位法线。
+ */
 function normals(polygon: Polygon): Point<2>[] {
   return polygon.flatMap((start, index) => {
     const end = polygon[(index + 1) % polygon.length] ?? start;
@@ -51,23 +86,47 @@ function normals(polygon: Polygon): Point<2>[] {
   });
 }
 
-/** SAT 需要检查的全部分离轴：两个多边形所有边的法线。 */
+/**
+ * SAT 需要检查的全部分离轴：两个多边形所有边的法线。
+ *
+ * @param shape 被拖元素的多边形。
+ * @param obstacle 障碍物。
+ * @returns 两者全部边的单位法线，可能有重复方向。
+ */
 const axes = (shape: Polygon, obstacle: Polygon): Point<2>[] => [
   ...normals(shape),
   ...normals(obstacle),
 ];
 
-/** 多边形在轴上的投影区间。 */
+/**
+ * 多边形在轴上的投影区间。
+ *
+ * @param polygon 多边形。
+ * @param axis 单位轴向量。
+ * @returns 各顶点投影的最小值与最大值。
+ */
 function project(polygon: Polygon, axis: Point<2>): Span {
   const values = polygon.map((point) => dot(point, axis));
   return { min: Math.min(...values), max: Math.max(...values) };
 }
 
-/** 两个投影区间是否分离；恰好接触也算分离（留 `epsilon` 容差），贴边移动不会被判为重叠。 */
+/**
+ * 两个投影区间是否分离；恰好接触也算分离（留 `epsilon` 容差），贴边移动不会被判为重叠。
+ *
+ * @param moving 被拖元素的投影区间。
+ * @param fixed 障碍物的投影区间。
+ * @returns 两区间不相交或只在容差内接触时为 `true`。
+ */
 const separated = (moving: Span, fixed: Span): boolean =>
   moving.max <= fixed.min + epsilon || fixed.max <= moving.min + epsilon;
 
-/** 分离轴定理：所有分离轴上的投影都相交时，两个凸多边形才重叠。 */
+/**
+ * 分离轴定理：所有分离轴上的投影都相交时，两个凸多边形才重叠。
+ *
+ * @param shape 被拖元素的多边形。
+ * @param obstacle 障碍物。
+ * @returns 重叠时为 `true`；分离、只接触或两者都没有非零长的边时为 `false`。
+ */
 function overlaps(shape: Polygon, obstacle: Polygon): boolean {
   const directions = axes(shape, obstacle);
   return (
@@ -118,7 +177,14 @@ function sweep(
   return { time: Math.max(0, enter), normal };
 }
 
-/** 所有障碍物里最早的一次接触。 */
+/**
+ * 所有障碍物里最早的一次接触。
+ *
+ * @param shape 被拖元素当前的四个角。
+ * @param motion 这一步的平移（容器空间）。
+ * @param obstacles 障碍物。
+ * @returns 时刻最小的接触；与所有障碍物都不相撞时为 `undefined`。
+ */
 function earliest(
   shape: Polygon,
   motion: Point<2>,
@@ -215,7 +281,7 @@ function grow(from: State, to: State, origin: State, edges: Edges): Path {
  *
  * @param from 上一步的状态。
  * @param to 候选状态。
- * @returns 绕不动点的路径；两步之差不是相似变换时为 `undefined`。
+ * @returns 绕不动点的路径；`from.matrix` 不可逆或两步之差不是相似变换时为 `undefined`。
  */
 function turn(from: State, to: State): Path | undefined {
   const inverse = plane.invert(from.matrix);
@@ -284,18 +350,22 @@ function advance(path: Path, blocked: (state: State) => boolean): State {
 export function collide(
   targets: (context: Context) => Iterable<Polygon>,
 ): Plugin {
+  /** 本次会话的障碍物，已去掉开始时就重叠的。 */
   let obstacles: Polygon[] = [];
+  /** 状态的四个角是否与任一障碍物重叠。 */
   const blocked = (state: State) => {
     const shape = corners(state);
     return obstacles.some((obstacle) => overlaps(shape, obstacle));
   };
   return {
+    /** 取本次会话的障碍物，忽略开始时就与元素重叠的。 */
     onStart: (context) => {
       const shape = corners(context.state);
       obstacles = [...targets(context)].filter(
         (obstacle) => !overlaps(shape, obstacle),
       );
     },
+    /** 纯平移时扫掠并滑动；其余变化重叠时沿路径二分，构造不出路径则退回上一步。 */
     onMove: ({ state, previous, origin, action: { freedom } }) => {
       if (obstacles.length === 0) return undefined;
       const motion = translation(previous, state);

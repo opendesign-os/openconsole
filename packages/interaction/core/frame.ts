@@ -3,6 +3,9 @@
  *
  * frame 指"屏幕坐标 → 容器空间"的仿射矩阵 F。节点的状态矩阵把局部空间映到容器空间，
  * 容器空间再经祖先链映到屏幕；F 由祖先链的线性部分和节点在屏幕上的包围盒中心反推出来。
+ *
+ * 这里只做纯计算，祖先链的线性部分与屏幕包围盒由 DOM 层测量后传入，
+ * 因此滚动、祖先变换变化后只需重新测量、重新求 frame。
  */
 
 import { plane, type Matrix } from "@openconsole/matrix";
@@ -18,6 +21,9 @@ import type { Bounds, State } from "../model";
  * @param from 移动前的 frame（屏幕坐标 → 旧容器空间）。
  * @param to 移动后的 frame（屏幕坐标 → 新容器空间）。
  * @returns 新容器空间里的状态矩阵；`from` 不可逆时为 `undefined`。
+ * @example
+ * const next = convert(state.matrix, before, after);
+ * if (next) store.assign({ matrix: next }); // 移交后视觉位置不跳
  */
 export function convert(
   matrix: Matrix<2, "affine">,
@@ -35,6 +41,8 @@ export function convert(
  * （`getBoundingClientRect` 的中心）。容器空间到屏幕的映射 P = [L | s − L·c]：
  * 线性部分取 L，平移部分让 c 恰好落到 s；frame 为 F = P⁻¹。
  * 用中心而不用角点：平行四边形的包围盒中心就是它的中心，不受旋转、斜切影响。
+ *
+ * 前提是 `box` 与 `state` 描述同一时刻的节点：状态已渲染到 DOM 之后再测量 `box`。
  *
  * @param linear 容器空间到屏幕的线性部分（祖先链各层变换的乘积，平移分量不用）。
  * @param box 节点在屏幕上的包围盒。

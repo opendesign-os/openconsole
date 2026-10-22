@@ -2,7 +2,8 @@
  * @file 空间索引：按包围盒存取条目，在大量目标里快速找出与查询范围相交的候选。
  *
  * 放置判定在会话开始时把各区域的包围盒插入索引，每次移动只查询与拖拽范围相交的区域，
- * 再对这些候选做精确判定。
+ * 再对这些候选做精确判定。内置 {@link Linear} 与 {@link Hash} 两种实现，
+ * 也可以实现 {@link Index} 接入 R 树、四叉树等。
  */
 
 import type { Bounds } from "../model";
@@ -34,7 +35,13 @@ export interface Index<T> {
   clear(): void;
 }
 
-/** 两个包围盒相交，边界接触也算。 */
+/**
+ * 判断两个包围盒是否相交，边界接触也算。
+ *
+ * @param left 包围盒。
+ * @param right 另一个包围盒，与 `left` 同一空间。
+ * @returns 两者在两条轴上的区间都有交集（含端点）时为 `true`。
+ */
 const overlaps = (left: Bounds, right: Bounds): boolean =>
   left.left <= right.right &&
   right.left <= left.right &&
@@ -51,11 +58,11 @@ const overlaps = (left: Bounds, right: Bounds): boolean =>
  * index.search({ left: 5, top: 5, right: 6, bottom: 6 }); // ["a"]
  */
 export class Linear<T> implements Index<T> {
-  /** 条目到包围盒。 */
+  /** 条目到包围盒，按插入顺序保存。 */
   readonly #items = new Map<T, Bounds>();
 
   /**
-   * 插入条目；同一条目再次插入时覆盖它的包围盒。
+   * 插入条目；同一条目再次插入时覆盖它的包围盒，位置不变。
    *
    * @param item 条目。
    * @param bounds 条目的包围盒。
@@ -68,7 +75,7 @@ export class Linear<T> implements Index<T> {
    * 查询包围盒与范围相交的条目。
    *
    * @param bounds 查询范围。
-   * @returns 相交的条目，按插入顺序。
+   * @returns 相交的条目，按插入顺序；每次查询都是新数组。
    */
   search(bounds: Bounds): T[] {
     return [...this.#items].flatMap(([item, box]) =>
@@ -101,7 +108,9 @@ export class Hash<T> implements Index<T> {
   readonly #cells = new Map<string, T[]>();
 
   /**
-   * @param size 格子边长，与包围盒同单位；缺省为 128。
+   * 创建空的网格哈希索引。
+   *
+   * @param size 格子边长，与包围盒同单位，应为正数；缺省为 128。
    */
   constructor(size = 128) {
     this.#size = size;
@@ -109,6 +118,8 @@ export class Hash<T> implements Index<T> {
 
   /**
    * 插入条目，登记到它覆盖的每个格子；同一条目不要重复插入，需要更新时先 `clear()` 再插入。
+   *
+   * 重复插入时查询仍按最新的包围盒判定，但旧的格子登记不会撤销，只会拖慢查询。
    *
    * @param item 条目。
    * @param bounds 条目的包围盒。
@@ -125,8 +136,10 @@ export class Hash<T> implements Index<T> {
   /**
    * 查询包围盒与范围相交的条目；跨多个格子的条目只返回一次。
    *
+   * 先收集查询范围覆盖的格子里的条目，再用精确的包围盒比较排除只是同格、并不相交的条目。
+   *
    * @param bounds 查询范围。
-   * @returns 相交的条目。
+   * @returns 相交的条目；每次查询都是新集合。
    */
   search(bounds: Bounds): Set<T> {
     const found = new Set<T>();
@@ -145,8 +158,16 @@ export class Hash<T> implements Index<T> {
     this.#cells.clear();
   }
 
-  /** 列出包围盒覆盖的格子键。 */
+  /**
+   * 列出包围盒覆盖的格子键。
+   *
+   * 格子坐标为 `⌊坐标 / size⌋`，右、下边界所在的格子也计入，与 `overlaps` 的含端点判定一致。
+   *
+   * @param bounds 包围盒。
+   * @yields {string} 覆盖的每个格子的键 `"x,y"`，逐列列出，每列从上到下。
+   */
   *#keys({ left, top, right, bottom }: Bounds): Generator<string> {
+    /** 坐标所在格子的序号。 */
     const cell = (value: number) => Math.floor(value / this.#size);
     for (let x = cell(left); x <= cell(right); x += 1) {
       for (let y = cell(top); y <= cell(bottom); y += 1) yield `${x},${y}`;

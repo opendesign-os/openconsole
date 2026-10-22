@@ -15,7 +15,10 @@ import { resizes, type Plugin } from "../core";
  * - 能平移：吸附矩阵的平移分量 `e`、`f`，即局部原点在容器空间里的位置。
  * - 只旋转或只缩放：不处理。
  *
- * @param step 网格步长，单位为容器空间像素，须为有限正数。
+ * 吸附取最近的步长倍数（`Math.round`）。宽高是局部空间（边框盒）的尺寸，节点带缩放时，
+ * 它们在容器空间里的格距随缩放变化。
+ *
+ * @param step 网格步长（像素），须为有限正数：平移按容器空间计，宽高按局部空间计。
  * @returns 只实现 `onMove` 的插件。
  * @throws {RangeError} `step` 不是有限正数时。
  * @example
@@ -25,8 +28,10 @@ export function grid(step: number): Plugin {
   if (!(Number.isFinite(step) && step > 0)) {
     throw new RangeError(`expected a positive step, received ${step}`);
   }
+  /** 取最近的 `step` 倍数。 */
   const snap = (value: number) => Math.round(value / step) * step;
   return {
+    /** 调整尺寸时吸附移动轴的宽高，能平移时吸附平移分量。 */
     onMove: ({ state, action: { freedom } }) => {
       if (resizes(freedom)) {
         const { edges } = freedom;

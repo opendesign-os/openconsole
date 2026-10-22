@@ -60,19 +60,24 @@ export interface Sort {
  *
  * 结果是结构变化（顺序、布局），由各自的事件报告，所以不提供 `onCommit`；
  * 按键由能力自己给出，`handle`、`ignore` 只接受选择器，在每个条目内查找。
+ * `activation` 缺省为 {@link deliberate}（触屏长按 250ms、其他指针移动 3px），可被选项覆盖。
  */
 export interface ListOptions
   extends
     Omit<BindOptions, "action" | "handle" | "ignore" | "keys" | "onCommit">,
     CapabilityOptions {
-  /** 条目的选择器，在根节点内查找，覆盖层（`data-layer`）自动排除；缺省为直接子元素。 */
+  /**
+   * 条目的选择器，在根节点内任意层级查找（可用 `:scope > …` 限定层级），覆盖层（`data-layer`）
+   * 自动排除；缺省为直接子元素。`Nestable` 中改为与各区域的直接子元素匹配。
+   */
   readonly items?: string;
   /** 句柄的选择器，在每个条目内查找；缺省整个条目都是句柄。 */
   readonly handle?: string;
   /** 排除区的选择器，在每个条目内查找，从这里按下不开始。 */
   readonly ignore?: string;
   /**
-   * FLIP 过渡时长（毫秒），0 为不过渡。
+   * FLIP 过渡时长（毫秒），不大于 0 时不过渡。
+   *
    * @default 150
    */
   readonly duration?: number;
@@ -81,19 +86,22 @@ export interface ListOptions
 /** {@link Sortable} 的选项。 */
 export interface SortableOptions extends ListOptions {
   /**
-   * 由候选状态的中心与各条目的布局盒（容器空间）求插入位置，返回 -1 表示不变。
+   * 由候选状态的中心与各条目的布局盒（容器空间，含被拖条目自身）求插入位置，返回 -1 表示不变。
+   *
    * @default closest
    */
   readonly slot?: Slot;
-  /** 顺序真正改变时调用；取消或放回原处不调用。 */
+  /** 顺序真正改变时调用，拖拽与 `move()` 都会触发；取消或放回原处不调用。 */
   readonly onSort?: (sort: Sort) => void;
 }
 
 /**
  * 排序：拖动条目时实时重排，其余条目以 FLIP 过渡让位，松手后条目落到新位置。
  *
- * 默认鼠标移动 3px、触屏长按 250ms 后开始（{@link deliberate}）；聚焦条目后按 Space 抓取，
- * 方向键移到相邻条目的位置，Esc 取消并恢复原顺序。`update` 只在 `items` 变化时重建。
+ * 默认鼠标移动 3px、触屏长按 250ms 后开始（{@link deliberate}）；聚焦条目后按 Space 或 Enter 抓取，
+ * 方向键移到相邻条目的位置（上、左为前一个，下、右为后一个），再按 Space 或 Enter 放下，
+ * Esc 取消并恢复原顺序。会话之外，每个条目状态的 `index` 与它的 DOM 序号一致。
+ * `update` 只在 `items` 变化时重建；增删条目后调用 `refresh()`。
  *
  * @example
  * const list = new Sortable(ul, {
@@ -108,6 +116,8 @@ export class Sortable extends Capability<
   Binding
 > {
   /**
+   * 把列表节点变成可排序列表：为当前每个条目创建绑定，并写入初始序号。
+   *
    * @param list 列表节点，条目默认是它的直接子元素。
    * @param options 排序选项。
    */
@@ -116,13 +126,14 @@ export class Sortable extends Capability<
     this.refresh();
   }
 
-  /** 当前条目，按 DOM 顺序；覆盖层不计入。 */
+  /** 当前条目，按 DOM 顺序；覆盖层不计入。每次读取都重新查询。 */
   get items(): HTMLElement[] {
     return query(this.node, this.options.items);
   }
 
   /**
-   * 不拖拽地把条目移到指定位置，作为拖拽之外的无障碍替代；会话进行中不生效。
+   * 不拖拽地把条目移到指定位置，作为拖拽之外的无障碍替代：其余条目以 FLIP 过渡让位，
+   * 随后重写序号并派发 `onSort`。会话进行中、条目不在列表里、序号越界或位置不变时不做任何事。
    *
    * @param item 要移动的条目。
    * @param index 目标序号。
@@ -136,7 +147,11 @@ export class Sortable extends Capability<
     return this;
   }
 
-  /** 为每个条目创建绑定，并写入初始序号。 */
+  /**
+   * 为每个条目创建绑定，并写入初始序号。
+   *
+   * @returns 与条目一一对应的绑定，状态的 `index` 已是条目的 DOM 序号。
+   */
   protected build(): readonly Part<Binding>[] {
     return this.items.map((item, index) =>
       bind(item, this.#config(item)).assign({ index }),
@@ -157,7 +172,12 @@ export class Sortable extends Capability<
     return true;
   }
 
-  /** 单个条目的绑定选项；`activation` 可被选项覆盖，插件顺序见文件说明。 */
+  /**
+   * 单个条目的绑定选项；`activation` 可被选项覆盖，插件顺序见文件说明。
+   *
+   * @param item 条目。
+   * @returns 绑定选项：动作为平移，按键为移到相邻条目。
+   */
   #config(item: HTMLElement): BindOptions {
     const { plugins = [] } = this.options;
     return {
@@ -169,7 +189,11 @@ export class Sortable extends Capability<
     };
   }
 
-  /** 由候选状态的中心求插入位置，写进状态的 `index`；`slot` 每次都读当前选项。 */
+  /**
+   * 由候选状态的中心求插入位置，写进状态的 `index`；`slot` 每次都读当前选项。
+   *
+   * @returns 只实现 `onMove` 的插件；判定为 -1 时不修改候选。
+   */
   #slot(): Plugin {
     return {
       onMove: ({ state }) => {
@@ -185,9 +209,13 @@ export class Sortable extends Capability<
   /**
    * 把状态里的 `index` 落实到 DOM：变化时重排，并让被拖条目按新布局位置重绘以保持视觉位置；
    * 结束时过渡回新位置并通知，取消时先恢复原顺序。
+   *
+   * @param item 被拖条目。
+   * @returns 实现 `onStart`、`onChange`、`onEnd` 与 `onCancel` 的插件。
    */
   #track(item: HTMLElement): Plugin {
     let from = -1;
+    /** 收尾：取消时先恢复原顺序；条目带过渡回到布局位置，重写序号，结束时派发 `onSort`。 */
     const finish = (back: boolean) => {
       const start = from;
       from = -1;
@@ -197,9 +225,11 @@ export class Sortable extends Capability<
       if (!back) this.#announce(item, start);
     };
     return {
+      /** 记下会话开始时的序号；为 -1 表示不在会话中。 */
       onStart: () => {
         from = this.items.indexOf(item);
       },
+      /** 每次提交后：序号变了就重排，再用 {@link View.relayout} 让被拖条目留在指针下。 */
       onChange: ({ state }) => {
         if (from < 0 || state.index === undefined) return;
         if (this.#reorder(item, state.index)) View.of(item).relayout();
@@ -209,8 +239,16 @@ export class Sortable extends Capability<
     };
   }
 
-  /** 键盘映射：方向键给出移到前一个或后一个条目中心的容器空间平移。 */
+  /**
+   * 键盘映射：方向键给出移到前一个或后一个条目中心的容器空间平移。
+   *
+   * 平移后由 `slot` 判定出新序号，从而触发重排；已在列表两端时对应方向不移动。
+   *
+   * @param item 条目。
+   * @returns 上、左移到前一个条目，下、右移到后一个条目的映射。
+   */
   #keys(item: HTMLElement): Keys {
+    /** 生成移到相对位置 `offset` 处条目中心的按键；目标不存在时这次按键不移动。 */
     const step =
       (offset: number) =>
       (state: State): Step | undefined => {
@@ -241,7 +279,9 @@ export class Sortable extends Capability<
    * 按 {@link arrange} 的计划把其他条目挪到被拖条目前后，被拖条目本身始终留在 DOM 中，
    * 不会因被移除而丢失指针捕获。
    *
-   * @returns 顺序是否改变。
+   * @param item 要移动的条目。
+   * @param index 目标序号。
+   * @returns 顺序是否改变；条目不在列表中、序号越界或与当前相同时为 `false`。
    */
   #reorder(item: HTMLElement, index: number): boolean {
     const items = this.items;
@@ -250,6 +290,7 @@ export class Sortable extends Capability<
     if (index === current) return false;
     const rects = record(items.filter((element) => element !== item));
     const { before, after } = arrange(current, index);
+    /** 按位置取条目，越界的位置跳过。 */
     const nodes = (positions: readonly number[]) =>
       positions.flatMap((position) => items[position] ?? []);
     item.before(...nodes(before));
@@ -266,7 +307,12 @@ export class Sortable extends Capability<
     }
   }
 
-  /** 位置确有变化时派发 `onSort`。 */
+  /**
+   * 位置确有变化时派发 `onSort`。
+   *
+   * @param item 被移动的条目。
+   * @param from 原序号；为 -1 或与当前序号相同时不派发。
+   */
   #announce(item: HTMLElement, from: number): void {
     const to = this.items.indexOf(item);
     if (from < 0 || to < 0 || from === to) return;

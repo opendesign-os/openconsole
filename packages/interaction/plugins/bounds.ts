@@ -18,6 +18,13 @@ const open: Bounds = {
   bottom: Infinity,
 };
 
+/**
+ * 判断包围盒是否完全在区域内，贴边也算在内。
+ *
+ * @param box 被检查的包围盒。
+ * @param region 区域。
+ * @returns 四条边都不越出区域时为 `true`。
+ */
 const inside = (box: Bounds, region: Bounds): boolean =>
   box.left >= region.left &&
   box.top >= region.top &&
@@ -31,7 +38,7 @@ const inside = (box: Bounds, region: Bounds): boolean =>
  * @param high 区间终点。
  * @param min 区域起点。
  * @param max 区域终点。
- * @returns 应加到区间上的位移。
+ * @returns 应加到区间上的位移；已在区域内时为 0。
  */
 function shift(low: number, high: number, min: number, max: number): number {
   if (high - low > max - min || low < min) return min - low;
@@ -100,6 +107,7 @@ function limit(
  * @returns 只改了尺寸的状态；矩阵由流水线最后的再投影重新钉住。
  */
 function fit(state: State, origin: State, edges: Edges, region: Bounds): State {
+  /** 给定宽高时，按起点钉住对边后的四个角（容器空间）。 */
   const shape = (width: number, height: number) => {
     const size = { width, height };
     return corners({ ...state, size, matrix: pin(origin, size, edges) });
@@ -127,7 +135,9 @@ function fit(state: State, origin: State, edges: Edges, region: Bounds): State {
  * - 能平移：把包围盒平移回区域；包围盒比区域还大时贴住左上。
  * - 只旋转或只缩放：退回上一次提交的状态。
  *
- * @param measure 返回区域（容器空间）的函数，在每次会话开始时调用一次。
+ * 区域是轴对齐的，按包围盒判断与按四个角判断等价，所以旋转后的节点同样能贴着区域的边。
+ *
+ * @param measure 返回区域（容器空间）的函数，在每次会话开始时调用一次；DOM 侧可用 `region(container, node)`。
  * @returns 实现 `onStart` 与 `onMove` 的插件。
  * @example
  * bind(node, {
@@ -136,11 +146,14 @@ function fit(state: State, origin: State, edges: Edges, region: Bounds): State {
  * });
  */
 export function bounds(measure: () => Bounds): Plugin {
+  /** 本次会话的区域；第一次会话开始前不限制。 */
   let region = open;
   return {
+    /** 量出本次会话的区域。 */
     onStart: () => {
       region = measure();
     },
+    /** 越界时按自由度推回、夹尺寸或退回上一步。 */
     onMove: ({ state, origin, previous, action: { freedom } }) => {
       const box = extent(corners(state));
       if (inside(box, region)) return undefined;

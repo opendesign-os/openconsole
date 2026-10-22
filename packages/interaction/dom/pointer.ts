@@ -3,6 +3,8 @@
  *
  * 每个 document 只装一个捕获阶段、passive 的 `pointerdown`；按下后沿 `composedPath()` 选出接受它的绑定。
  * 会话期间的监听共用一个 `AbortController`，结束时一次摘除；全局同一时间只有一个指针会话。
+ * 一次会话从按下到最后一根手指抬起，分两个阶段：待起动（只观察起动条件）与已起动（驱动绑定）。
+ * 所有点都是屏幕坐标（`clientX/clientY`）。
  */
 
 import type { Point } from "@openconsole/matrix";
@@ -19,27 +21,35 @@ import {
  * 列表类能力的默认起动条件：触屏长按 250ms（容许 5px 抖动），其他指针移动 3px。
  *
  * 触屏因此仍能滚动页面，鼠标点击也不会误触拖动。
+ *
  * @param type `PointerEvent.pointerType`。
  * @returns 该指针类型的起动条件。
+ * @example
+ * bind(item, { action: transform({ translate: true }), activation: deliberate });
  */
 export const deliberate = (type: string): Activation =>
   type === "touch" ? { delay: 250, tolerance: 5 } : { distance: 3 };
 
 /** 一个绑定在某元素上登记的标记；同一元素可以有多个绑定的标记。 */
 interface Claim {
+  /** 登记标记的绑定。 */
   readonly control: Control;
+  /** 标记种类：`"handle"` 句柄或 `"ignore"` 排除区。 */
   readonly kind: Mark["kind"];
+  /** 优先级，越大越优先。 */
   readonly priority: number;
 }
 
-/** 取事件目标上登记的标记。 */
+/** 取事件目标上登记的标记；没有登记时为 `undefined`。 */
 type Lookup = (element: EventTarget) => readonly Claim[] | undefined;
 
 /** 一次指针会话：从按下到最后一根手指抬起。 */
 interface Session {
+  /** 接受这次按下的绑定。 */
   readonly control: Control;
   /** 命中的句柄元素；指针捕获设在它上面，新手指须按在它内部才能加入。 */
   readonly handle: Element;
+  /** 按下时按指针类型取得的起动条件，会话期间不变。 */
   readonly activation: Activation;
   /** 本次会话所有监听共用的控制器。 */
   readonly controller: AbortController;
@@ -66,12 +76,23 @@ const claims = new WeakMap<EventTarget, readonly Claim[]>();
 /** 当前指针会话；会话中新的按下只会作为额外手指加入。 */
 let session: Session | undefined;
 
+/**
+ * 取指针事件的位置。
+ *
+ * @param event 指针事件。
+ * @returns 屏幕坐标（`clientX`、`clientY`）。
+ */
 const locate = (event: PointerEvent): Point<2> => ({
   x: event.clientX,
   y: event.clientY,
 });
 
-/** 会话最多接受的手指数：动作允许旋转或缩放时为 2，否则为 1。 */
+/**
+ * 求会话最多接受的手指数：只有能旋转或缩放的动作才需要第二根手指。
+ *
+ * @param control 会话的绑定。
+ * @returns 动作允许旋转或缩放时为 2，否则为 1。
+ */
 const limit = ({ action: { freedom } }: Control): number =>
   freedom.rotate || freedom.scale ? 2 : 1;
 
@@ -80,6 +101,7 @@ const limit = ({ action: { freedom } }: Control): number =>
  *
  * 沿路径由内向外查看属于 `control` 的标记：最内层的生效，外层标记优先级更高时覆盖；
  * 最终生效的是句柄才接受，是排除区或没有标记都不接受。
+ *
  * @param path `event.composedPath()`，由内向外。
  * @param control 待判断的绑定。
  * @param find 取元素上登记的标记。
@@ -107,6 +129,7 @@ function allows(
  *
  * 沿路径由内向外，在每个元素上按优先级从高到低尝试其句柄，返回第一个接受这次按下的绑定；
  * 被排除的按下因此会继续交给外层绑定，例如卡片正文上的按下去平移画布。
+ *
  * @param path `event.composedPath()`，由内向外。
  * @param find 取元素上登记的标记。
  * @returns 句柄元素与绑定；没有绑定接受时为 `undefined`。
@@ -114,7 +137,14 @@ function allows(
 function pick(
   path: readonly EventTarget[],
   find: Lookup,
-): { handle: EventTarget; control: Control } | undefined {
+):
+  | {
+      /** 命中的句柄元素，即登记句柄标记的那个路径成员。 */
+      handle: EventTarget;
+      /** 接受这次按下的绑定。 */
+      control: Control;
+    }
+  | undefined {
   for (const element of path) {
     const handles = (find(element) ?? [])
       .filter((claim) => claim.kind === "handle")
@@ -126,7 +156,15 @@ function pick(
   return undefined;
 }
 
-/** 按下点是否落在句柄内层的交互元素上，是则不起动。 */
+/**
+ * 判断按下点是否落在句柄内层的交互元素上，是则不起动。
+ *
+ * 只检查路径上句柄以内的部分：句柄本身或它外层是交互元素时不算。
+ *
+ * @param path `event.composedPath()`，由内向外。
+ * @param handle 命中的句柄元素。
+ * @returns 句柄内层有匹配 `interactive` 的元素时为 `true`。
+ */
 function blocked(path: readonly EventTarget[], handle: Element): boolean {
   for (const element of path) {
     if (element === handle) return false;
@@ -135,7 +173,13 @@ function blocked(path: readonly EventTarget[], handle: Element): boolean {
   return false;
 }
 
-/** 设置指针捕获；合成事件或指针已释放时 `setPointerCapture` 会抛错，此时忽略。 */
+/**
+ * 设置指针捕获，让手指移出句柄后事件仍发给它；合成事件或指针已释放时
+ * `setPointerCapture` 会抛错，此时忽略。
+ *
+ * @param element 捕获指针的元素，即句柄。
+ * @param id `PointerEvent.pointerId`。
+ */
 function capture(element: Element, id: number): void {
   try {
     element.setPointerCapture(id);
@@ -144,8 +188,13 @@ function capture(element: Element, id: number): void {
   }
 }
 
-/** 吞掉拖动结束后紧随的一次 click，避免松手误触点击；下一个宏任务即撤销。 */
+/**
+ * 吞掉拖动结束后紧随的一次 click，避免松手误触点击；下一个宏任务即撤销。
+ *
+ * @param document 会话所在的文档，在其捕获阶段拦截 click。
+ */
 function suppress(document: Document): void {
+  /** 拦下 click：阻止传播与默认行为。 */
   const swallow = (event: Event) => {
     event.stopPropagation();
     event.preventDefault();
@@ -157,7 +206,11 @@ function suppress(document: Document): void {
   );
 }
 
-/** 阻止原生拖放（`dragstart`）打断会话。 */
+/**
+ * 阻止原生拖放（`dragstart`）打断会话。
+ *
+ * @param event `dragstart` 事件。
+ */
 function prevent(event: Event): void {
   event.preventDefault();
 }
@@ -165,6 +218,10 @@ function prevent(event: Event): void {
 /**
  * 满足起动条件后开始会话：以按下位置调用 `start`，捕获所有手指，清除并持续清除文字选区，
  * 再以最新位置推进一次。`start` 返回 `false` 时取消这次按下。
+ *
+ * 起点用各手指按下时的位置而不是当前位置，所以起动前移动的距离不会丢失。
+ *
+ * @param current 待起动的会话；已起动或已不是当前会话时忽略。
  */
 function begin(current: Session): void {
   if (current.started || session !== current) return;
@@ -176,6 +233,7 @@ function begin(current: Session): void {
   current.started = true;
   for (const id of pointers.keys()) capture(handle, id);
   const document = handle.ownerDocument;
+  /** 清除文档里的文字选区，会话期间每次选区变化都再清一次。 */
   const clear = () => document.getSelection()?.removeAllRanges();
   clear();
   document.addEventListener("selectionchange", clear, {
@@ -185,9 +243,11 @@ function begin(current: Session): void {
 }
 
 /**
- * 结束指针会话并摘除监听；未起动的按下直接丢弃。
+ * 结束指针会话并摘除监听；未起动的按下直接丢弃，不通知绑定。
  *
  * `end` 时以结束位置调用 `control.end` 并吞掉随后的 click；`cancel` 时调用 `control.cancel`。
+ * 释放指针捕获前已置空会话并摘除监听，随之而来的 `lostpointercapture` 不会再次结束会话。
+ *
  * @param current 要结束的会话；已不是当前会话时忽略。
  * @param kind 结束方式。
  * @param points 结束时的输入点（屏幕坐标）。
@@ -217,6 +277,9 @@ function finish(
 /**
  * 会话中又一根手指按下：未达手指上限且按在当前句柄内时加入同一会话；
  * 已起动时立即推进，点数变化由 Tracker 重新取锚，节点不跳。
+ *
+ * @param current 当前会话。
+ * @param event 新手指的 `pointerdown`。
  */
 function join(current: Session, event: PointerEvent): void {
   if (current.pointers.size >= limit(current.control)) return;
@@ -232,7 +295,11 @@ function join(current: Session, event: PointerEvent): void {
 
 /**
  * 文档级 `pointerdown`：已有会话时尝试作为新手指加入；否则选出绑定，建立待起动的会话并挂上监听。
- * 鼠标只接受主键；长按起动时开始计时。
+ *
+ * 鼠标只接受主键；按在句柄内层的交互元素上时不处理。会话期间在文档捕获阶段监听移动、抬起、
+ * 取消、失去捕获、`dragstart`、Esc 与 `touchmove`；长按起动时开始计时，到点即起动。
+ *
+ * @param event 指针事件。
  */
 function down(event: PointerEvent): void {
   if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -267,7 +334,7 @@ function down(event: PointerEvent): void {
   document.addEventListener("pointercancel", cancel, options);
   document.addEventListener("lostpointercapture", lost, options);
   document.addEventListener("dragstart", prevent, options);
-  document.addEventListener("keydown", escape, options);
+  document.addEventListener("keydown", dismiss, options);
   document.addEventListener("touchmove", touch, { ...options, passive: false });
   if (activation.delay !== undefined) {
     current.timer = setTimeout(() => begin(current), activation.delay);
@@ -277,10 +344,14 @@ function down(event: PointerEvent): void {
 /**
  * 会话中的指针移动：已起动则推进；未起动时检查起动条件，长按期间超出容差即放弃，
  * 移动距离达到要求即起动。
+ *
+ * 只处理本会话的手指；起动距离按事件位置到首次按下点的直线距离（屏幕像素）计算。
+ *
+ * @param event 指针事件。
  */
 function move(event: PointerEvent): void {
   const current = session;
-  if (!current || !current.pointers.has(event.pointerId)) return;
+  if (!current?.pointers.has(event.pointerId)) return;
   current.pointers.set(event.pointerId, locate(event));
   current.last = event;
   if (current.started) {
@@ -299,10 +370,14 @@ function move(event: PointerEvent): void {
   if (moved >= distance) begin(current);
 }
 
-/** 手指抬起：最后一根抬起时以抬起位置结束会话，否则以剩下的手指推进。 */
+/**
+ * 手指抬起：最后一根抬起时以抬起位置结束会话，否则以剩下的手指推进（未起动时只移除该手指）。
+ *
+ * @param event 指针事件。
+ */
 function up(event: PointerEvent): void {
   const current = session;
-  if (!current || !current.pointers.has(event.pointerId)) return;
+  if (!current?.pointers.has(event.pointerId)) return;
   current.pointers.delete(event.pointerId);
   current.last = event;
   if (current.pointers.size === 0) {
@@ -314,26 +389,42 @@ function up(event: PointerEvent): void {
   }
 }
 
-/** `pointercancel`（例如被系统手势接管）时取消会话。 */
+/**
+ * `pointercancel`（例如被系统手势接管）时取消会话，状态回到起点。
+ *
+ * @param event 指针事件；不属于本会话的手指时忽略。
+ */
 function cancel(event: PointerEvent): void {
   if (session?.pointers.has(event.pointerId)) finish(session, "cancel", []);
 }
 
-/** 失去指针捕获（例如句柄被移出文档）时以当前位置结束会话。 */
+/**
+ * 失去指针捕获（例如句柄被移出文档）时以各手指的当前位置结束会话。
+ *
+ * @param event 指针事件；会话未起动或不属于本会话的手指时忽略。
+ */
 function lost(event: PointerEvent): void {
   const current = session;
   if (!current?.started || !current.pointers.has(event.pointerId)) return;
   finish(current, "end", [...current.pointers.values()]);
 }
 
-/** 会话中按 Esc 取消，状态回到起点。 */
-function escape(event: KeyboardEvent): void {
+/**
+ * 会话中按 Esc 取消，状态回到起点；待起动阶段按 Esc 则直接放弃这次按下。
+ *
+ * @param event 键盘事件；不是 Escape 时忽略，处理时阻止默认行为。
+ */
+function dismiss(event: KeyboardEvent): void {
   if (event.key !== "Escape" || !session) return;
   event.preventDefault();
   finish(session, "cancel", []);
 }
 
-/** 会话起动后阻止触屏滚动；为此 `touchmove` 监听不能是 passive。 */
+/**
+ * 会话起动后阻止触屏滚动；为此 `touchmove` 监听不能是 passive。
+ *
+ * @param event 触摸事件；不可取消（滚动已开始）时不处理。
+ */
 function touch(event: TouchEvent): void {
   if (session?.started && event.cancelable) event.preventDefault();
 }
@@ -341,11 +432,12 @@ function touch(event: TouchEvent): void {
 /**
  * 在元素上登记标记，并确保该 document 已装好 `pointerdown` 委托（重复添加同一监听会被浏览器忽略）。
  *
- * 句柄的 `touch-action` 按起动条件设置：长按起动用 `manipulation`，保留页面滚动；否则为 `none`。
- * 注销时恢复原值。
+ * 句柄的 `touch-action` 按触屏的起动条件设置：长按起动用 `manipulation`，保留页面滚动；否则为 `none`。
+ * 起动条件在登记时读取，绑定的 `activation` 变化时会重挂输入源，从而重新设置；注销时恢复原值。
+ *
  * @param element 句柄或排除区元素。
  * @param claim 要登记的标记。
- * @returns 注销函数。
+ * @returns 注销函数；只移除本次登记的标记，进行中的会话不受影响。
  */
 function register(element: Element, claim: Claim): () => void {
   claims.set(element, [...(claims.get(element) ?? []), claim]);
@@ -378,6 +470,7 @@ function register(element: Element, claim: Claim): () => void {
  *
  * 支持鼠标、触屏与笔；动作允许旋转或缩放时最多两指。起动条件取自 `control.activation`，
  * 起动后捕获指针、清除文字选区，Esc 或 `pointercancel` 取消，拖动后吞掉随后的 click。
+ *
  * @returns 输入源。
  * @example
  * bind(node, { action: transform({ translate: true }), sensors: [pointer()] });

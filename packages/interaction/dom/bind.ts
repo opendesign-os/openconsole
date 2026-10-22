@@ -3,6 +3,7 @@
  *
  * {@link Binding} 实现 {@link Control}，由各输入源驱动；状态经节点的 {@link View} 共享并渲染。
  * {@link observe} 让外部旁观所有绑定的会话，例如放置区判定。
+ * 坐标约定：输入点为屏幕坐标，状态在容器空间，两者之间的映射（frame）在会话开始与滚动时测量。
  */
 
 import type { Matrix } from "@openconsole/matrix";
@@ -22,7 +23,7 @@ import { pointer } from "./pointer";
 import type { Activation, Control, Keys, Mark, Sensor } from "./sensor";
 import { View, type Render } from "./view";
 
-/** 交给旁观者的会话快照。 */
+/** 交给旁观者的会话快照；每次通知都新建，不随会话继续变化。 */
 export interface Session {
   /** 会话所在的节点。 */
   readonly node: HTMLElement;
@@ -38,25 +39,33 @@ export interface Session {
   readonly data: unknown;
 }
 
-/** 旁观者：收到所有绑定的会话事件，不影响会话本身。 */
+/**
+ * 旁观者：收到所有绑定的会话事件，不影响会话本身。
+ *
+ * 在会话自身的回调与插件之后收到通知；回调里可以调用 {@link observe} 返回的函数取消旁观。
+ */
 export interface Observer {
   /**
    * 会话开始。
+   *
    * @param session 会话快照。
    */
   onStart?(session: Session): void;
   /**
-   * 会话推进：每次移动、步进、滚动重放与动画帧之后。
+   * 会话推进：每次移动、步进、滚动重放、动画帧，以及松手时的那一帧之后。
+   *
    * @param session 会话快照。
    */
   onMove?(session: Session): void;
   /**
    * 会话结束（动画帧停下之后）。
+   *
    * @param session 会话快照。
    */
   onEnd?(session: Session): void;
   /**
    * 会话取消，状态已回到起点。
+   *
    * @param session 会话快照。
    */
   onCancel?(session: Session): void;
@@ -74,23 +83,30 @@ export interface BindOptions {
   /** 把输入点换算成状态的动作，例如 `transform({ translate: true })`。 */
   readonly action: Action;
   /**
-   * 输入源。
+   * 输入源；所有绑定缺省共用同一组实例。
+   *
    * @default [pointer(), keyboard()]
    */
   readonly sensors?: readonly Sensor[];
-  /** 句柄：只有从句柄内按下才开始；缺省时整个节点都是句柄。 */
+  /**
+   * 句柄：只有从句柄内按下才开始；缺省时整个节点都是句柄。
+   *
+   * 选择器在创建绑定或 `update` 改变它时于节点内查找一次，之后新增的元素不会自动成为句柄。
+   */
   readonly handle?: Elements;
-  /** 排除区：从这里按下不开始，交给外层绑定。 */
+  /** 排除区：从这里按下不开始，交给外层绑定；选择器的查找时机同 `handle`。 */
   readonly ignore?: Elements;
-  /** 插件，按数组顺序处理每一帧的候选状态。 */
+  /** 插件，按数组顺序处理每一帧的候选状态；本选项里的回调总在所有插件之后。 */
   readonly plugins?: readonly Plugin[];
   /**
    * 指针起动条件，可按指针类型返回不同条件；缺省时按下后第一次移动就开始。
+   *
    * @default {}
    */
   readonly activation?: Activation | ((type: string) => Activation);
   /**
    * 句柄与排除区的默认优先级，也决定同一元素上多个绑定的先后。
+   *
    * @default 0
    */
   readonly priority?: number;
@@ -100,9 +116,9 @@ export interface BindOptions {
   readonly keys?: Keys;
   /** 交给旁观者的载荷，放置区可以读到。 */
   readonly data?: unknown;
-  /** 会话开始时调用。 */
+  /** 会话开始时调用，此时已加锁并测量了 frame。 */
   readonly onStart?: (context: Context) => void;
-  /** 每一帧候选状态经插件处理后调用（位于插件链末尾）。 */
+  /** 每一帧候选状态经插件处理后调用（位于插件链末尾）；返回值被忽略，不能修改候选状态。 */
   readonly onMove?: (context: Context) => void;
   /** 会话结束时调用（动画帧停下之后），此时锁已释放。 */
   readonly onEnd?: (context: Context) => void;
@@ -114,19 +130,22 @@ export interface BindOptions {
 
 /** 一个已登记的标记及其输入源清理函数；重挂输入源时替换 `release`，标记本身不变。 */
 interface Entry {
+  /** 登记的句柄或排除区标记。 */
   readonly mark: Mark;
+  /** 摘除各输入源为该标记挂上的监听；重挂输入源时换成新的清理函数。 */
   release: () => void;
 }
 
 /** 全局旁观者。 */
 const observers = new Set<Observer>();
 
-/** 缺省输入源：指针与键盘。 */
+/** 缺省输入源：指针与键盘；模块级常量，所有绑定共用同一组实例。 */
 const defaults: readonly Sensor[] = [pointer(), keyboard()];
 
 /**
  * 旁观所有绑定的会话，例如放置区判定、全局日志。
- * @param observer 旁观者。
+ *
+ * @param observer 旁观者；同一对象重复添加只算一次。
  * @returns 取消旁观的函数。
  * @example
  * const stop = observe({ onEnd: ({ node, data }) => console.log(node, data) });
@@ -139,11 +158,22 @@ export function observe(observer: Observer): () => void {
   };
 }
 
-/** 选项里是否有键盘映射；有无变化时要重挂输入源（键盘输入源只在有映射时挂载）。 */
+/**
+ * 判断选项里是否有键盘映射；有无变化时要重挂输入源（键盘输入源只在有映射时挂载）。
+ *
+ * @param options 绑定选项。
+ * @returns `keys` 至少有一项时为 `true`。
+ */
 const keyed = ({ keys = {} }: BindOptions): boolean =>
   Object.keys(keys).length > 0;
 
-/** 把 {@link Elements} 解析成元素列表；选择器在节点内查找。 */
+/**
+ * 把 {@link Elements} 解析成元素列表；选择器在节点内查找（不含节点自身）。
+ *
+ * @param node 在其内部查找选择器的节点。
+ * @param value 句柄或排除区的取值。
+ * @returns 元素列表；`value` 为 `undefined` 时为空。
+ */
 function resolve(
   node: HTMLElement,
   value: Elements | undefined,
@@ -189,11 +219,13 @@ export class Binding implements Control {
     onCancel: (context) => this.#options.onCancel?.(context),
     onCommit: (operation) => this.#options.onCommit?.(operation),
   };
+  /** 当前选项：构造时的选项合并历次 `update` 写入的部分。 */
   #options: BindOptions;
   /** 没有任何句柄时把节点本身作为句柄的隐式标记。 */
   #fallback: Entry | undefined;
   /** 由选项 `handle`、`ignore` 登记的标记的注销函数；选项变化时只重登这一批，手动登记的保留。 */
   #declared: (() => void)[] = [];
+  /** 是否尚未销毁；销毁后不再登记隐式句柄。 */
   #alive = true;
   /** 本次会话的屏幕 → 容器空间映射；滚动时重新测量。 */
   #frame: Matrix<2, "affine"> | undefined;
@@ -206,6 +238,9 @@ export class Binding implements Control {
 
   /**
    * 创建绑定：加入节点的共享状态，登记句柄与排除区；没有句柄时整个节点作为句柄。
+   *
+   * 加入共享状态时立即同步当前状态；给出 `render` 时替换该节点视图的渲染。
+   *
    * @param node 被变换的节点。
    * @param options 选项。
    */
@@ -250,8 +285,9 @@ export class Binding implements Control {
 
   /**
    * 按指针类型取起动条件。
+   *
    * @param type `PointerEvent.pointerType`。
-   * @returns 该指针类型的起动条件。
+   * @returns 该指针类型的起动条件；选项 `activation` 是函数时调用它，否则原样返回。
    */
   activation(type: string): Activation {
     const { activation = {} } = this.#options;
@@ -261,6 +297,11 @@ export class Binding implements Control {
   /**
    * 开始会话：先收尾仍在出帧的上一次会话，加锁，结束 FLIP 过渡并让状态跟上布局，
    * 测量 frame，再监听滚动。
+   *
+   * 滚动监听挂在文档捕获阶段，文档内任何元素滚动都会触发 {@link Binding.refresh}。不只听祖先是有意的：
+   * 无关容器（如放置区所在的列表）滚动后，旁观者也靠这次刷新带来的新 frame 重新量取被滚走的目标。
+   * 滚动事件随渲染帧派发，每个滚动元素每帧至多一次，开销有限。
+   *
    * @param input 起点输入（屏幕坐标）。
    * @returns 是否开始；已有会话、被同一节点上的其他绑定锁住或无法测量 frame 时为 `false`。
    */
@@ -291,7 +332,9 @@ export class Binding implements Control {
 
   /**
    * 按输入点推进会话：求解、经插件处理后提交并渲染；插件请求动画时开始出帧。
+   *
    * 没有会话或已松手时忽略。
+   *
    * @param input 当前输入（屏幕坐标）。
    * @returns 绑定本身。
    */
@@ -307,6 +350,7 @@ export class Binding implements Control {
 
   /**
    * 以一步离散变换推进会话（键盘、滚轮），作用在约束后的当前状态上。没有会话或已松手时忽略。
+   *
    * @param step 变换及其所在空间。
    * @returns 绑定本身。
    */
@@ -321,6 +365,9 @@ export class Binding implements Control {
 
   /**
    * 结束会话：先以 `released: true` 再跑一帧；插件仍在动画就继续出帧，否则立即收尾。
+   *
+   * 没有会话或已松手时忽略。
+   *
    * @param input 结束时的输入；带点时记为最近一次输入。
    * @returns 绑定本身。
    */
@@ -338,6 +385,9 @@ export class Binding implements Control {
 
   /**
    * 取消会话：停止动画帧、释放锁，状态回到起点并触发 onCancel。
+   *
+   * 松手后仍在出帧的会话同样可以取消；没有会话时忽略。
+   *
    * @returns 绑定本身。
    */
   cancel(): this {
@@ -352,6 +402,9 @@ export class Binding implements Control {
 
   /**
    * 重新测量：没有会话时让状态跟上布局；会话中重测 frame 并重放最近一次输入（滚动时自动调用）。
+   *
+   * 重放让被拖元素在滚动后仍贴着指针；frame 测不出来时保持原样。
+   *
    * @returns 绑定本身。
    */
   refresh(): this {
@@ -370,19 +423,21 @@ export class Binding implements Control {
   }
 
   /**
-   * 只写传入的选项并就地生效，不打断进行中的会话；按值比较，未变化的键不做任何事。
+   * 只写传入的选项并就地生效，不打断进行中的会话；按引用比较（`!==`），未变化的键不做任何事。
    *
    * - `action`、`plugins`：交给 Tracker，会话中延后到会话结束再替换。
-   * - 回调：立即生效（经插件链末尾的回调插件读取最新选项）。
+   * - 回调、`keys`、`data`：立即生效（使用时读取最新选项）。
    * - `sensors`、`activation`，或 `keys` 由空变非空（或反之）：重挂所有标记上的输入源。
    * - `handle`、`ignore`、`priority`：重新登记由选项声明的标记，手动登记的保留。
    * - `render`：直接替换。
+   *
    * @param options 要修改的选项。
    * @returns 绑定本身。
    */
   update(options: Partial<BindOptions>): this {
     const previous = this.#options;
     this.#options = { ...previous, ...options };
+    /** 本次传入了其中任一键，且值与之前不同。 */
     const changed = (...keys: (keyof BindOptions)[]) =>
       keys.some((key) => key in options && options[key] !== previous[key]);
     if (changed("render")) this.#view.render = this.#options.render;
@@ -409,6 +464,9 @@ export class Binding implements Control {
 
   /**
    * 写入状态（容器空间）；会话中无效。
+   *
+   * 写入经共享状态同步给同一节点上的其他绑定并渲染。
+   *
    * @param patch 要写入的 `matrix`、`size` 或 `index`。
    * @returns 绑定本身。
    */
@@ -419,7 +477,9 @@ export class Binding implements Control {
 
   /**
    * 登记一个句柄：登记后只有从句柄内按下才开始；同一元素重复登记时替换。
+   *
    * @param element 句柄元素；命中元素与被变换的节点可以不同。
+   * @param options 登记选项。
    * @param options.priority 优先级，缺省为选项 `priority`。
    * @returns 注销函数，可直接用作框架 ref 回调的清理；句柄全部注销后整个节点恢复为句柄。
    */
@@ -429,7 +489,9 @@ export class Binding implements Control {
 
   /**
    * 登记一个排除区：从这里按下不开始，交给外层绑定；同一元素重复登记时替换。
+   *
    * @param element 排除区元素。
+   * @param options 登记选项。
    * @param options.priority 优先级，缺省为选项 `priority`；高于内层句柄时可以覆盖它。
    * @returns 注销函数。
    */
@@ -439,6 +501,8 @@ export class Binding implements Control {
 
   /**
    * 销毁：仍在出帧的会话直接收尾，进行中的会话取消；注销全部标记并离开共享状态。可重复调用。
+   *
+   * 节点的视图与已写入的样式保留，同一节点上的其他绑定不受影响。
    */
   destroy(): void {
     if (!this.#alive) return;
@@ -464,6 +528,7 @@ export class Binding implements Control {
     this.destroy();
   }
 
+  /** 选项里的默认优先级，缺省为 0；登记句柄、排除区与隐式句柄时使用。 */
   get #priority(): number {
     return this.#options.priority ?? 0;
   }
@@ -480,6 +545,9 @@ export class Binding implements Control {
 
   /**
    * 在句柄或排除区表里登记标记并挂载输入源，随后同步隐式句柄。
+   *
+   * @param entries 句柄表或排除区表；同一元素已有登记时先注销旧的。
+   * @param mark 要登记的标记。
    * @returns 注销函数；元素已被重新登记时不做任何事，只注销本次登记的那一个。
    */
   #add(entries: Map<Element, Entry>, mark: Mark): () => void {
@@ -496,7 +564,9 @@ export class Binding implements Control {
   }
 
   /**
-   * 让每个输入源为标记挂载监听。
+   * 让每个输入源为标记挂载监听；输入源取当前选项 `sensors`，缺省为指针与键盘。
+   *
+   * @param mark 要挂载的标记。
    * @returns 依次调用各输入源清理函数的函数。
    */
   #attach(mark: Mark): () => void {
@@ -534,7 +604,7 @@ export class Binding implements Control {
     }
   }
 
-  /** 插件请求动画且尚未申请时，申请下一帧。 */
+  /** 插件请求动画且尚未申请时，向节点所在窗口申请下一帧。 */
   #animate(): void {
     if (this.#request !== undefined || !this.#tracker.animating) return;
     const view = this.node.ownerDocument.defaultView;
@@ -545,6 +615,8 @@ export class Binding implements Control {
   /**
    * 动画帧：以帧时间重放最近一次输入并提交；仍有插件在动画就继续申请，
    * 已松手且动画停下则收尾。
+   *
+   * @param time `requestAnimationFrame` 给出的帧时间（毫秒）。
    */
   #tick(time: number): void {
     this.#request = undefined;
@@ -587,7 +659,13 @@ export class Binding implements Control {
     this.#scroll = undefined;
   }
 
-  /** 通知旁观者；没有旁观者或从未测量过 frame 时跳过。 */
+  /**
+   * 通知旁观者；没有旁观者或从未测量过 frame 时跳过。
+   *
+   * 遍历旁观者的副本，旁观者在回调里取消旁观不影响本轮通知。
+   *
+   * @param name 要调用的旁观者方法。
+   */
   #notify(name: keyof Observer): void {
     const frame = this.#frame;
     if (observers.size === 0 || !frame) return;
@@ -605,9 +683,10 @@ export class Binding implements Control {
 
 /**
  * 创建绑定。所有能力都是它的预设，新能力用同一接口编写。
+ *
  * @param node 被变换的节点。
  * @param options 选项。
- * @returns 绑定。
+ * @returns 绑定，等同于 `new Binding(node, options)`。
  * @example
  * const binding = bind(node, {
  *   action: transform({ translate: true, rotate: true, scale: true }),

@@ -3,6 +3,7 @@
  *
  * 状态在容器空间（offsetParent 内边距盒，左上为原点）；渲染写 `transform = T(−offset)·matrix`，
  * offset 为布局位置（`offsetLeft/offsetTop`），所以变换为单位矩阵时节点恰在布局位置。
+ * 接管之后状态是几何的唯一来源：只写 DOM，不再从 DOM 读回变换。
  */
 
 import { plane, space, type Matrix, type Point } from "@openconsole/matrix";
@@ -30,14 +31,30 @@ import { fold } from "./style";
 
 /**
  * 自定义渲染：替换默认的 CSS 写入，例如交给框架状态或画布。
+ *
+ * 每次提交都会调用，包括接管之前；设置后 View 不再写 `transform`、`width`、`height`，
+ * 但接管时仍会改写 `transform-origin` 等内联样式。
+ *
  * @param node 节点。
  * @param state 要呈现的状态（容器空间）。
+ * @example
+ * bind(node, {
+ *   action: transform({ translate: true }),
+ *   render: (_, state) => setGeometry(state), // 交给框架状态，由框架负责写 DOM
+ * });
  */
 export type Render = (node: HTMLElement, state: State) => void;
 
 /** 节点 → 视图；每个节点只有一个视图，节点上的多项能力共享。 */
 const views = new WeakMap<HTMLElement, View>();
 
+/**
+ * 判断两个尺寸是否相同，容差 1e-6 像素，避免浮点误差引发多余的写入。
+ *
+ * @param left 一个尺寸。
+ * @param right 另一个尺寸。
+ * @returns 宽、高之差都小于容差时为 `true`。
+ */
 const same = (left: Size, right: Size): boolean =>
   Math.abs(left.width - right.width) < 1e-6 &&
   Math.abs(left.height - right.height) < 1e-6;
@@ -47,13 +64,18 @@ const same = (left: Size, right: Size): boolean =>
  * 此后状态是几何的唯一来源，每次提交都写回 DOM，不再从 DOM 读回变换。
  *
  * 用 {@link View.of} 获取，不直接构造。
+ *
+ * @example
+ * const view = View.of(card);
+ * view.store.assign({ matrix: plane.translate(40, 20) }); // 写入状态并渲染
+ * view.frame(); // 屏幕坐标 → 容器空间
  */
 export class View {
   /** 被接管的节点。 */
   readonly node: HTMLElement;
   /** 节点的共享状态；节点上的每个绑定都以成员身份加入。 */
   readonly store: Store;
-  /** 自定义渲染，设置后替换默认的 CSS 写入。 */
+  /** 自定义渲染，设置后替换默认的 CSS 写入；`undefined` 时用默认写入。 */
   render: Render | undefined;
   /** 最近一次读取的布局位置（`offsetLeft/offsetTop`，容器空间）。 */
   #offset: Point<2> = { x: 0, y: 0 };
@@ -66,6 +88,11 @@ export class View {
   /** 接管前收到的写入是否已给出尺寸；是则接管时不再用测量值覆盖。 */
   #sized = false;
 
+  /**
+   * 创建视图：以单位矩阵与当前测量的尺寸初始化共享状态，并尝试立即接管。
+   *
+   * @param node 被接管的节点。
+   */
   private constructor(node: HTMLElement) {
     this.node = node;
     this.#size = size(node);
@@ -78,6 +105,7 @@ export class View {
 
   /**
    * 取节点的视图，没有则创建并尝试立即接管。
+   *
    * @param node 节点。
    * @returns 该节点唯一的视图。
    */
@@ -90,10 +118,11 @@ export class View {
   }
 
   /**
-   * 让状态与当前布局一致；节点未渲染时什么也不做，留到下次调用。
+   * 让状态与当前布局一致；节点未渲染（未挂载或 `display: none`）时什么也不做，留到下次调用。
    *
    * 首次接管：把计算样式里的 `transform-origin`、`translate`、`rotate`、`scale`、`transform`
    * 折叠成 `T(offset)·fold`，清除内联的 translate、rotate、scale 并设 `transform-origin: 0 0`。
+   * 接管前已写入的矩阵或尺寸保留，不被折叠结果与测量值覆盖。
    * 之后：布局位置或尺寸变了时，矩阵随布局平移同样的距离，即视觉位置跟着布局走。
    */
   prepare(): void {
@@ -154,13 +183,22 @@ export class View {
 
   /**
    * 求屏幕坐标 → 容器空间的仿射映射。
+   *
+   * 由祖先链的线性部分、节点的屏幕包围盒与当前状态反推，见 core 的 `frame`；
+   * 滚动、祖先变换变化后需重新求。
+   *
    * @returns 映射矩阵；祖先变换不可逆时为 `undefined`。
    */
   frame(): Matrix<2, "affine"> | undefined {
     return frame(linear(this.node), rect(this.node), this.store.state);
   }
 
-  /** Store 提交后的回调：接管前记录哪些分量已被写入，再渲染。 */
+  /**
+   * Store 提交后的回调：接管前记录哪些分量已被写入，再渲染。
+   *
+   * @param state 提交后的状态。
+   * @param patch 本次写入，用于判断给出了矩阵还是尺寸。
+   */
   #change(state: State, patch: Patch): void {
     if (!this.#folded) {
       this.#placed ||= Boolean(patch.matrix);
@@ -172,6 +210,10 @@ export class View {
   /**
    * 把状态写回 DOM。有自定义渲染时交给它；否则尺寸变了先写 `width`、`height` 并重读 offset，
    * 再写 `transform: matrix3d(T(−offset)·matrix)`，恰为单位矩阵时写 `none`。未接管时不写。
+   *
+   * 写尺寸后重读 offset：尺寸变化可能让布局位置移动（如居中、弹性布局），`transform` 需按新位置抵消。
+   *
+   * @param state 要呈现的状态（容器空间）。
    */
   #paint(state: State): void {
     const { node, render } = this;
@@ -199,8 +241,10 @@ export class View {
  * 把节点移到另一个容器，屏幕上的位置、旋转与尺寸都不变。
  *
  * 移动前后各求一次 frame，矩阵按 `convert(matrix, before, after)` 换到新容器的空间。
+ * 任一次求不出 frame（祖先变换不可逆）时仍会移动，但不做位置补偿。
+ *
  * @param node 要移交的节点。
- * @param container 目标容器。
+ * @param container 目标容器，节点被追加为它的最后一个子节点。
  * @returns 是否移交；已在该容器里或正处于会话中时为 `false`。
  * @example
  * transfer(card, group); // 卡片移进分组，视觉位置不跳
@@ -224,28 +268,45 @@ export function transfer(node: HTMLElement, container: HTMLElement): boolean {
  *
  * 容器就是节点的 offsetParent 时直接取 `[0, clientWidth] × [0, clientHeight]`；
  * 否则（容器是更远的祖先）把容器客户区的屏幕多边形经节点的 frame 换算后取包围盒。
+ * 无法换算（变换不可逆）时不限制范围：客户区的坐标不在节点的容器空间里，直接拿来夹会把节点推错地方。
+ *
  * @param container 限定范围的容器，可以是任意祖先。
  * @param node 被限定的节点。
- * @returns 测量函数，`bounds` 在每次会话开始时调用。
+ * @returns 测量函数，`bounds` 在每次会话开始时调用，返回容器空间里的区域；无法换算时四边为 ±Infinity。
+ * @example
+ * bind(node, {
+ *   action: transform({ translate: true }),
+ *   plugins: [bounds(region(board, node))],
+ * });
  */
 export const region =
   (container: HTMLElement, node: HTMLElement) => (): Bounds => {
-    const whole = {
-      left: 0,
-      top: 0,
-      right: container.clientWidth,
-      bottom: container.clientHeight,
-    };
-    if (node.offsetParent === container) return whole;
+    if (node.offsetParent === container) {
+      return {
+        left: 0,
+        top: 0,
+        right: container.clientWidth,
+        bottom: container.clientHeight,
+      };
+    }
     const frame = View.of(node).frame();
     const polygon = client(container);
-    if (!frame || !polygon) return whole;
+    if (!frame || !polygon) {
+      return {
+        left: -Infinity,
+        top: -Infinity,
+        right: Infinity,
+        bottom: Infinity,
+      };
+    }
     return extent(polygon.map((point) => plane.apply(frame, point)));
   };
 
 /**
  * 让节点回到布局位置：重读 offset 并把矩阵设为 `T(offset)`，使 `transform` 为 `none`。
- * 会话中调用无效（状态被锁）。
+ *
+ * 旋转、缩放一并清除，尺寸保持不变；会话中调用时矩阵不变（状态被锁）。
+ *
  * @param node 节点。
  */
 export function reset(node: HTMLElement): void {

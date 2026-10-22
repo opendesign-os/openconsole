@@ -43,9 +43,14 @@ export interface Patch {
 /**
  * 把局部写入合并进状态。
  *
+ * 值为 `undefined` 的字段视为未给出；`index` 只在给出时写入，原状态没有序号时也不会凭空出现。
+ *
  * @param state 原状态。
  * @param patch 局部写入。
  * @returns 新状态；`patch` 不含任何字段时原样返回 `state`，调用方据此判断有无写入。
+ * @example
+ * merge(state, {}) === state; // true：空写入不产生新对象
+ * merge(state, { size: { width: 80, height: 40 } }); // 只换尺寸，矩阵与序号保持不变
  */
 export function merge(state: State, { matrix, size, index }: Patch): State {
   if (!matrix && !size && index === undefined) return state;
@@ -60,8 +65,13 @@ export function merge(state: State, { matrix, size, index }: Patch): State {
 /**
  * 状态的四个角在容器空间里的位置。
  *
+ * 节点旋转、斜切后四个角不再构成轴对齐矩形，需要包围盒时再交给 `extent`。
+ *
  * @param state 状态。
- * @returns 依次为左上、右上、右下、左下的四边形。
+ * @returns 依次为局部空间的左上、右上、右下、左下角映射后的四边形。
+ * @example
+ * corners({ matrix: plane.translate(10, 20), size: { width: 80, height: 40 } });
+ * // [{ x: 10, y: 20 }, { x: 90, y: 20 }, { x: 90, y: 60 }, { x: 10, y: 60 }]
  */
 export function corners(state: State): Polygon {
   const { width, height } = state.size;
@@ -77,8 +87,12 @@ export function corners(state: State): Polygon {
 /**
  * 状态的边框盒中心在容器空间里的位置。
  *
+ * 与 `centroid(corners(state))` 相同，但只变换一个点。
+ *
  * @param state 状态。
  * @returns 中心点。
+ * @example
+ * center({ matrix: plane.translate(10, 20), size: { width: 80, height: 40 } }); // { x: 50, y: 40 }
  */
 export const center = (state: State): Point<2> =>
   plane.apply(state.matrix, {

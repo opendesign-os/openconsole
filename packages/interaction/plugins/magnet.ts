@@ -24,10 +24,15 @@ import {
 export interface MagnetOptions {
   /**
    * 吸附距离，屏幕像素；乘以 `frame` 的缩放得到容器空间里的距离。
+   *
    * @default 5
    */
   readonly distance?: number;
-  /** 参考线变化时调用，坐标在容器空间；吸附消失或会话结束时收到空数组。 */
+  /**
+   * 参考线变化时调用，坐标在容器空间；参考线消失（包括会话结束或取消）时收到空数组。
+   *
+   * 与上一次相同的参考线不重复通知。DOM 侧可直接传 `guides(host)` 的返回值。
+   */
   readonly onSnap?: (guides: readonly Guide[]) => void;
 }
 
@@ -56,47 +61,104 @@ interface Pair {
 
 /** 会话开始时由目标算好的吸附数据：各轴的对齐线与相邻对。 */
 interface Snaps {
+  /** 各轴的对齐线：每个目标在该轴上的起点、中点、终点。 */
   readonly lines: Readonly<Record<Axis, readonly Line[]>>;
+  /** 各轴的相邻对，用于等间距吸附。 */
   readonly pairs: Readonly<Record<Axis, readonly Pair[]>>;
 }
 
+/** 没有目标时的吸附数据：第一次会话开始前使用，什么也吸不到。 */
 const empty: Snaps = { lines: { x: [], y: [] }, pairs: { x: [], y: [] } };
 
-/** 包围盒在该轴上的区间。 */
+/**
+ * 包围盒在该轴上的区间。
+ *
+ * @param box 包围盒。
+ * @param axis 轴。
+ * @returns `x` 轴为 `[left, right]`，`y` 轴为 `[top, bottom]`。
+ */
 const along = (box: Bounds, axis: Axis): Span =>
   axis === "x"
     ? { min: box.left, max: box.right }
     : { min: box.top, max: box.bottom };
 
-/** 包围盒在另一轴上的区间。 */
+/**
+ * 包围盒在另一轴上的区间。
+ *
+ * @param box 包围盒。
+ * @param axis 当前比较的轴。
+ * @returns `x` 轴时为 `[top, bottom]`，`y` 轴时为 `[left, right]`。
+ */
 const across = (box: Bounds, axis: Axis): Span =>
   axis === "x"
     ? { min: box.top, max: box.bottom }
     : { min: box.left, max: box.right };
 
-/** 由该轴坐标 `value` 与另一轴坐标 `cross` 组成容器空间里的点。 */
+/**
+ * 由该轴坐标 `value` 与另一轴坐标 `cross` 组成容器空间里的点。
+ *
+ * @param axis 当前比较的轴。
+ * @param value 该轴上的坐标。
+ * @param cross 另一轴上的坐标。
+ * @returns 容器空间里的点。
+ */
 const point = (axis: Axis, value: number, cross: number): Point<2> =>
   axis === "x" ? { x: value, y: cross } : { x: cross, y: value };
 
+/**
+ * 区间中点。
+ *
+ * @param span 区间。
+ * @returns `(min + max) / 2`。
+ */
 const middle = ({ min, max }: Span): number => (min + max) / 2;
 
+/**
+ * 区间长度。
+ *
+ * @param span 区间。
+ * @returns `max − min`。
+ */
 const length = ({ min, max }: Span): number => max - min;
 
-/** 区间上可吸附的三个点：起点、中点、终点。 */
+/**
+ * 区间上可吸附的三个点：起点、中点、终点。
+ *
+ * @param span 区间。
+ * @returns `[min, middle, max]`。
+ */
 const marks = (span: Span): number[] => [span.min, middle(span), span.max];
 
-/** 两个坐标视为重合，用来判断参考线是否命中。 */
+/**
+ * 两个坐标视为重合，用来判断参考线是否命中。
+ *
+ * @param left 一个坐标。
+ * @param right 另一个坐标。
+ * @returns 差值不超过 `epsilon` 时为 `true`。
+ */
 const near = (left: number, right: number): boolean =>
   Math.abs(left - right) <= epsilon;
 
-/** 两个区间的交集；不相交或只接触时为 `undefined`。 */
+/**
+ * 两个区间的交集；不相交或只接触时为 `undefined`。
+ *
+ * @param left 一个区间。
+ * @param right 另一个区间。
+ * @returns 长度为正的交集区间。
+ */
 function overlap(left: Span, right: Span): Span | undefined {
   const min = Math.max(left.min, right.min);
   const max = Math.min(left.max, right.max);
   return min < max ? { min, max } : undefined;
 }
 
-/** 在 `reach` 内取绝对值最小的偏移；都超出时为 `undefined`。 */
+/**
+ * 在 `reach` 内取绝对值最小的偏移；都超出时为 `undefined`。
+ *
+ * @param offsets 候选偏移。
+ * @param reach 允许的最大绝对值（含）。
+ * @returns 最近的偏移，同样近时取先出现的。
+ */
 function nearest(offsets: Iterable<number>, reach: number): number | undefined {
   let best: number | undefined;
   for (const offset of offsets) {
@@ -106,13 +168,27 @@ function nearest(offsets: Iterable<number>, reach: number): number | undefined {
   return best;
 }
 
-/** 所有目标在该轴上的对齐线，每个目标三条。 */
+/**
+ * 所有目标在该轴上的对齐线，每个目标三条。
+ *
+ * @param boxes 目标的包围盒。
+ * @param axis 轴。
+ * @returns 每个目标的起点、中点、终点线，按目标顺序排列。
+ */
 const collect = (boxes: readonly Bounds[], axis: Axis): Line[] =>
   boxes.flatMap((box) =>
     marks(along(box, axis)).map((value) => ({ value, box })),
   );
 
-/** 每个目标与其后最近、且在另一轴上有重叠的目标组成相邻对。 */
+/**
+ * 每个目标与其后最近、且在另一轴上有重叠的目标组成相邻对。
+ *
+ * 「其后」指 `after` 的起点在 `before` 的终点之后（间距大于 `epsilon`）；逐对比较，复杂度为目标数的平方。
+ *
+ * @param boxes 目标的包围盒。
+ * @param axis 轴。
+ * @returns 每个目标至多一个相邻对。
+ */
 function neighbors(boxes: readonly Bounds[], axis: Axis): Pair[] {
   return boxes.flatMap((before) => {
     const end = along(before, axis).max;
@@ -158,6 +234,12 @@ function spots(box: Bounds, axis: Axis, pairs: readonly Pair[]): number[] {
 /**
  * 平移时该轴的吸附偏移：被拖元素的起点、中点、终点对齐任一对齐线，或落到等间距落点；
  * 取 `reach` 内最近的一个，没有时为 0。
+ *
+ * @param box 被拖元素的包围盒（容器空间）。
+ * @param axis 比较的轴。
+ * @param snaps 会话开始时算好的吸附数据。
+ * @param reach 吸附距离（容器空间）。
+ * @returns 该轴上应加的平移量；没有可吸附的目标时为 0。
  */
 function offset(box: Bounds, axis: Axis, snaps: Snaps, reach: number): number {
   const span = along(box, axis);
@@ -173,6 +255,8 @@ function offset(box: Bounds, axis: Axis, snaps: Snaps, reach: number): number {
 /**
  * 调整尺寸时该轴上的尺寸变化量：只把移动的边吸到最近的对齐线。
  *
+ * 两条边各自求吸附量，取较近的一个；起点边向外吸（坐标变小）时尺寸变大，所以取反。
+ *
  * @param span 被拖元素在该轴上的区间（容器空间）。
  * @param start 起点那条边是否移动。
  * @param end 终点那条边是否移动。
@@ -187,6 +271,7 @@ function growth(
   lines: readonly Line[],
   reach: number,
 ): number {
+  /** 把一条边吸到 `reach` 内最近的对齐线所需的位移。 */
   const pull = (source: number) =>
     nearest(
       lines.map((line) => line.value - source),
@@ -202,7 +287,14 @@ function growth(
   return start && end ? change * 2 : change;
 }
 
-/** 平移吸附：两轴各自求偏移，在容器空间里平移。 */
+/**
+ * 平移吸附：两轴各自求偏移，在容器空间里平移。
+ *
+ * @param state 候选状态。
+ * @param snaps 会话开始时算好的吸附数据。
+ * @param reach 吸附距离（容器空间）。
+ * @returns 吸附后的状态；两轴都不需要偏移时原样返回 `state`。
+ */
 function shift(state: State, snaps: Snaps, reach: number): State {
   const box = extent(corners(state));
   const x = offset(box, "x", snaps, reach);
@@ -219,7 +311,12 @@ function shift(state: State, snaps: Snaps, reach: number): State {
  *
  * 容器空间里的变化量除以 `a`、`d` 换回局部尺寸，再按会话起点钉住对边；元素被旋转时不吸附。
  *
- * @returns 吸附后的状态；元素被旋转时为 `undefined`。
+ * @param state 候选状态。
+ * @param origin 会话起点，用于钉住对边。
+ * @param edges 移动的边。
+ * @param snaps 会话开始时算好的吸附数据。
+ * @param reach 吸附距离（容器空间）。
+ * @returns 吸附后的状态，尺寸不小于 0；不需要吸附时原样返回 `state`；元素被旋转、斜切或翻转时为 `undefined`。
  */
 function stretch(
   state: State,
@@ -247,6 +344,11 @@ function stretch(
 /**
  * 按自由度选择吸附方式：调整尺寸吸移动的边，能平移吸位置，其余动作不吸附。
  * 键盘输入（没有指针点）不吸附，否则每次 1 像素的方向键移不出吸附范围。
+ *
+ * @param context 插件上下文，用到候选状态、会话起点、输入与动作自由度。
+ * @param snaps 会话开始时算好的吸附数据。
+ * @param reach 吸附距离（容器空间）。
+ * @returns 吸附后的状态；不吸附时为 `undefined`。
  */
 function snap(
   { state, origin, input, action: { freedom } }: Context,
@@ -261,7 +363,14 @@ function snap(
   return undefined;
 }
 
-/** 命中的对齐线转成参考线：同一坐标上的线合并，从被拖元素延伸到所有命中的目标。 */
+/**
+ * 命中的对齐线转成参考线：同一坐标上的线合并，从被拖元素延伸到所有命中的目标。
+ *
+ * @param box 被拖元素吸附后的包围盒。
+ * @param axis 比较的轴；`x` 轴上的对齐线是竖线。
+ * @param lines 该轴上的对齐线。
+ * @returns 对齐参考线（`kind: "align"`），每个命中的坐标一条。
+ */
 function aligns(box: Bounds, axis: Axis, lines: readonly Line[]): Guide[] {
   const sources = marks(along(box, axis));
   const spans = new Map<number, Span>();
@@ -284,10 +393,16 @@ function aligns(box: Bounds, axis: Axis, lines: readonly Line[]): Guide[] {
 /**
  * 命中的等间距转成参考线（`kind: "gap"`）：原有间距一段，加上被拖元素一侧同样的间距一段；
  * 居中时两段分在被拖元素左右。每段画在两者在另一轴重叠区间的中线上。
+ *
+ * @param box 被拖元素吸附后的包围盒。
+ * @param axis 比较的轴。
+ * @param pairs 该轴上的相邻对。
+ * @returns 间距参考线；没有命中的等间距时为空数组。
  */
 function gaps(box: Bounds, axis: Axis, pairs: readonly Pair[]): Guide[] {
   const span = along(box, axis);
   const cross = across(box, axis);
+  /** 沿该轴从 `start` 到 `end` 的一段间距线，画在 `level` 的中线上。 */
   const segment = (start: number, end: number, level: Span): Guide => ({
     kind: "gap",
     from: point(axis, start, middle(level)),
@@ -316,7 +431,13 @@ function gaps(box: Bounds, axis: Axis, pairs: readonly Pair[]): Guide[] {
   });
 }
 
-/** 被拖元素在当前位置命中的全部参考线。 */
+/**
+ * 被拖元素在当前位置命中的全部参考线。
+ *
+ * @param box 被拖元素吸附后的包围盒。
+ * @param snaps 会话开始时算好的吸附数据。
+ * @returns 两轴的对齐线与间距段。
+ */
 const guides = (box: Bounds, snaps: Snaps): Guide[] => [
   ...aligns(box, "x", snaps.lines.x),
   ...aligns(box, "y", snaps.lines.y),
@@ -324,7 +445,12 @@ const guides = (box: Bounds, snaps: Snaps): Guide[] => [
   ...gaps(box, "y", snaps.pairs.y),
 ];
 
-/** 参考线的指纹：参考线不变时不重复调用 `onSnap`。 */
+/**
+ * 参考线的指纹：参考线不变时不重复调用 `onSnap`。
+ *
+ * @param guides 参考线。
+ * @returns 由种类与端点坐标拼成的字符串；空数组为 `""`。
+ */
 const key = (guides: readonly Guide[]): string =>
   guides
     .map(({ kind, from, to }) => `${kind}${from.x},${from.y},${to.x},${to.y}`)
@@ -353,14 +479,18 @@ export function magnet(
   targets: (context: Context) => Iterable<Polygon>,
   { distance = 5, onSnap }: MagnetOptions = {},
 ): Plugin {
+  /** 本次会话的吸附数据。 */
   let snaps = empty;
+  /** 上一次输出的参考线指纹。 */
   let shown = "";
+  /** 参考线变化时才调用 `onSnap`。 */
   const show = (next: readonly Guide[]) => {
     if (key(next) === shown) return;
     shown = key(next);
     onSnap?.(next);
   };
   return {
+    /** 取目标的包围盒，预先算好两轴的对齐线与相邻对。 */
     onStart: (context) => {
       const boxes = [...targets(context)].map(extent);
       snaps = {
@@ -368,6 +498,7 @@ export function magnet(
         pairs: { x: neighbors(boxes, "x"), y: neighbors(boxes, "y") },
       };
     },
+    /** 按屏幕像素换算的距离吸附，并输出吸附后命中的参考线。 */
     onMove: (context) => {
       const next = snap(context, snaps, distance * scale(context.frame));
       show(next ? guides(extent(corners(next)), snaps) : []);

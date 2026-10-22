@@ -4,6 +4,9 @@
  * 每帧：输入点经 frame 换到容器空间 → 动作从段基准求出候选（proposed）→ 插件依次约束 →
  * 调整尺寸时按最终尺寸再钉住对边 → 提交。手指数变化或施加 {@link Step} 时，
  * 当前结果收成新的段基准，所以一次会话的结果是各段变换的连乘。
+ *
+ * 会话生命周期：`start` → 若干次 `move`/`nudge` →（可选）`release` 后若干次 `tick` → `end`；
+ * 任一时刻可以 `cancel` 回到起点。DOM 侧的 `bind` 是它的驱动方之一。
  */
 
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
@@ -36,11 +39,11 @@ export interface Modifiers {
 export interface Input {
   /** 输入点（屏幕坐标），0~2 个；键盘、滚轮输入为空数组。 */
   readonly points: readonly Point<2>[];
-  /** 修饰键。 */
+  /** 修饰键；程序调用可以省略。 */
   readonly modifiers?: Modifiers;
   /** 原生事件，按需自行收窄类型。 */
   readonly event?: unknown;
-  /** 时间戳（毫秒），用于求速度与动画帧。 */
+  /** 时间戳（毫秒），用于求速度与动画帧；{@link Tracker.tick} 会改写为帧时间。 */
   readonly timestamp?: number;
 }
 
@@ -85,23 +88,52 @@ export interface Context {
  * 时序：`onStart` → 每帧 `onMove`（按插件顺序传递候选）→ 每次提交后 `onChange`；
  * 结束时 `onEnd`，状态相对起点有变化再调用 `onCommit`；取消时 `onCancel`。
  * 会话中替换的插件在会话结束后生效。
+ *
+ * @example
+ * const floor: Plugin = {
+ *   onMove: ({ state }) => {
+ *     const [a, b, c, d, e, f] = state.matrix;
+ *     return e < 0 ? { ...state, matrix: [a, b, c, d, 0, f] } : undefined;
+ *   },
+ * }; // 局部原点（左上角）在容器空间里的 x 不小于 0
  */
 export interface Plugin {
-  /** 加入管线时调用一次。 */
+  /**
+   * 加入管线时调用一次。
+   *
+   * @param context 只含当前状态的上下文。
+   */
   onAttach?(context: Pick<Context, "state">): void;
-  /** 会话开始。 */
+  /**
+   * 会话开始，在第一次 `onMove` 之前。
+   *
+   * @param context 会话上下文，`state` 为起点状态。
+   */
   onStart?(context: Context): void;
   /**
    * 每帧调用，按插件顺序依次处理候选。
    *
-   * @returns 新的候选；返回空值表示不修改。
+   * @param context 会话上下文，`state` 为动作求出、经前面插件处理后的候选。
+   * @returns 新的候选，交给下一个插件；返回 `undefined` 表示不修改候选。
    */
-  onMove?(context: Context): State | void;
-  /** 会话结束，在 `onCommit` 之前。 */
+  onMove?(context: Context): State | undefined;
+  /**
+   * 会话结束，在 `onCommit` 之前。
+   *
+   * @param context 会话上下文，`state` 为最终状态。
+   */
   onEnd?(context: Context): void;
-  /** 会话取消；被调用时状态已回到起点，插件可以在此基础上再写入。 */
+  /**
+   * 会话取消；被调用时状态已回到起点，插件可以在此基础上再写入。
+   *
+   * @param context 会话上下文，`state` 为起点状态。
+   */
   onCancel?(context: Context): void;
-  /** 每次提交后调用一次：移动、nudge、帧、assign、cancel。 */
+  /**
+   * 每次提交后调用一次：移动、nudge、帧、release、assign、cancel。
+   *
+   * @param context 只含刚提交的状态的上下文。
+   */
   onChange?(context: Pick<Context, "state">): void;
   /**
    * 会话改变了状态时，在 `onEnd` 之后调用一次。
@@ -114,15 +146,25 @@ export interface Plugin {
   /**
    * 是否还需要动画帧。任一插件返回 `true` 时，驱动方每帧调用 {@link Tracker.tick}；
    * 松手后仍为 `true` 时推迟结束，直到所有插件都返回 `false`。
+   *
+   * @returns 仍需动画帧时为 `true`。
    */
   animating?(): boolean;
 }
 
 /** {@link Tracker} 的配置。 */
 export interface TrackerOptions {
-  /** 动作，缺省为 `transform({ translate: true })`；会话中更新时从下一次会话起生效。 */
+  /**
+   * 动作；会话中更新时从下一次会话起生效。
+   *
+   * @default transform({ translate: true })
+   */
   readonly action?: Action | undefined;
-  /** 插件，按顺序执行；会话中更新时在会话结束后替换。 */
+  /**
+   * 插件，按顺序执行；会话中更新时在会话结束后替换。
+   *
+   * @default []
+   */
   readonly plugins?: readonly Plugin[] | undefined;
 }
 
@@ -156,7 +198,12 @@ const initial: State = {
   size: { width: 0, height: 0 },
 };
 
-/** 净变化确有变化：矩阵不是单位矩阵，或宽高有增量；容差为 {@link epsilon}。 */
+/**
+ * 判断净变化是否确有变化：矩阵不是单位矩阵，或宽高有增量；容差为 {@link epsilon}。
+ *
+ * @param operation 会话的净变化。
+ * @returns 超出容差时为 `true`，据此决定是否调用 `onCommit`。
+ */
 const changed = ({ matrix, size }: Operation): boolean =>
   !plane.equals(matrix, plane.identity, epsilon) ||
   Math.abs(size.width) > epsilon ||
@@ -202,6 +249,7 @@ function apply(
  *
  * 同一时间最多一个会话。连续输入（`move`）每帧从段基准整体求解，离散输入（`nudge`）作用在
  * 已约束的当前状态上。松手后可由驱动方继续出帧：`release` → 每帧 `tick` → `end`。
+ * 所有方法都返回自身，便于链式调用；没有会话时，会话类方法静默忽略。
  *
  * @example
  * const tracker = new Tracker({ plugins: [grid(20)] });
@@ -224,6 +272,8 @@ export class Tracker {
   #session: Session | undefined;
 
   /**
+   * 创建管线；状态初始为单位矩阵、零尺寸，插件依次收到 `onAttach`。
+   *
    * @param options 动作与插件。
    */
   constructor(options: TrackerOptions = {}) {
@@ -263,6 +313,7 @@ export class Tracker {
    * 更新动作或插件，省略的保持不变。
    *
    * 会话中传入的插件在会话结束后替换；动作从下一次会话起生效。
+   * 替换插件时，离开的调用 `onDetach`，新加入的调用 `onAttach`，两组都有的不打扰。
    *
    * @param options 要更新的项。
    * @returns 自身。
@@ -279,6 +330,8 @@ export class Tracker {
   /**
    * 写入状态；会话中不生效。
    *
+   * 不经过动作与插件约束；有变化时通知各插件的 `onChange`。
+   *
    * @param patch 要写入的字段。
    * @returns 自身。
    */
@@ -290,6 +343,8 @@ export class Tracker {
 
   /**
    * 开始会话；已有会话时忽略。
+   *
+   * 记下起点状态与起始输入点，依次调用插件的 `onStart`；此时不提交新状态。
    *
    * @param input 起始输入，点为屏幕坐标。
    * @param frame 屏幕坐标 → 容器空间；缺省为单位矩阵，即输入点已在状态所在的空间。
@@ -321,7 +376,7 @@ export class Tracker {
    * 处理一次连续输入：从段基准整体求解，经插件约束后提交。
    *
    * 点数与段起点不同（第二根手指按下或抬起）时，先把上一帧的候选收成新的段基准，
-   * 手指数变化时不跳动。
+   * 手指数变化时不跳动。没有会话时忽略。
    *
    * @param input 当前输入，点为屏幕坐标。
    * @param frame 新的 frame，例如滚动后重新测量；缺省沿用当前 frame。
@@ -349,6 +404,7 @@ export class Tracker {
    * 施加一步离散变换（键盘、滚轮），并把结果收成新的段基准。
    *
    * 作用在约束之后的状态上，所以撞到边界后反方向按一次就能离开。
+   * 没有会话，或 `"screen"` 空间下 frame 不可逆时忽略。
    *
    * @param step 变换及其所在空间。
    * @returns 自身。
@@ -370,7 +426,7 @@ export class Tracker {
    *
    * 由驱动方在 {@link Tracker.animating} 为真时每帧调用。
    *
-   * @param timestamp 帧时间（毫秒）。
+   * @param timestamp 帧时间（毫秒），通常取 `requestAnimationFrame` 回调的参数。
    * @returns 自身。
    */
   tick(timestamp: number): this {
@@ -392,7 +448,7 @@ export class Tracker {
    * 之后驱动方在 {@link Tracker.animating} 为真时继续 {@link Tracker.tick}，
    * 变为假后调用 {@link Tracker.end}。重复调用无效。
    *
-   * @param input 结束时的输入。
+   * @param input 结束时的输入；缺省沿用最近一次输入。
    * @returns 自身。
    */
   release(input?: Input): this {
@@ -408,8 +464,9 @@ export class Tracker {
    * 结束会话：调用插件的 `onEnd`；状态相对起点有变化时，再以净变化调用 `onCommit`。
    *
    * 净变化在 `onEnd` 之前求出，`onEnd` 里的写入（例如移交到别的容器）不计入。
+   * 会话中传入的插件随后替换。
    *
-   * @param input 结束时的输入。
+   * @param input 结束时的输入；缺省沿用最近一次输入。
    * @returns 自身。
    */
   end(input?: Input): this {
@@ -430,6 +487,8 @@ export class Tracker {
   /**
    * 取消会话：状态先回到起点，再调用插件的 `onCancel`。
    *
+   * 不调用 `onEnd` 与 `onCommit`；会话中传入的插件随后替换。
+   *
    * @returns 自身。
    */
   cancel(): this {
@@ -446,6 +505,8 @@ export class Tracker {
   /**
    * 取消进行中的会话，并卸下全部插件（依次调用 `onDetach`）。
    *
+   * 会话中传入、尚未生效的插件会随取消先换上，再一并卸下。
+   *
    * @returns 自身。
    */
   destroy(): this {
@@ -455,7 +516,13 @@ export class Tracker {
     return this;
   }
 
-  /** 组装插件上下文；锚点按段基准与最近的输入点求出。 */
+  /**
+   * 组装插件上下文；锚点按段基准与最近的输入点求出。
+   *
+   * @param session 进行中的会话。
+   * @param state 放进上下文的 `state`。
+   * @returns 插件上下文。
+   */
   #context(session: Session, state: State): Context {
     return {
       state,
@@ -473,6 +540,8 @@ export class Tracker {
    * 管线的一帧：候选依次经过插件，调整尺寸时按最终尺寸重新钉住对边，再提交。
    *
    * 钉住放在插件之后：插件改了尺寸也不会破坏"对边不动"。
+   *
+   * @param session 进行中的会话，提供候选、段基准与上下文。
    */
   #commit(session: Session): void {
     const context = this.#context(session, session.proposed);
@@ -492,7 +561,11 @@ export class Tracker {
     this.#change(state);
   }
 
-  /** 写入状态，并通知各插件的 `onChange`。 */
+  /**
+   * 写入状态，并通知各插件的 `onChange`。
+   *
+   * @param state 新状态。
+   */
   #change(state: State): void {
     this.#state = state;
     for (const plugin of this.#plugins) plugin.onChange?.({ state });
@@ -504,7 +577,11 @@ export class Tracker {
     this.#pending = undefined;
   }
 
-  /** 换一组插件：离开的调用 `onDetach`，新加入的调用 `onAttach`，保留的不打扰。 */
+  /**
+   * 换一组插件：离开的调用 `onDetach`，新加入的调用 `onAttach`，保留的不打扰。
+   *
+   * @param plugins 新的插件列表。
+   */
   #swap(plugins: readonly Plugin[]): void {
     const previous = this.#plugins;
     this.#plugins = plugins;
