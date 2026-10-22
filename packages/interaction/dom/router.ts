@@ -8,6 +8,9 @@ export interface Activation {
   readonly tolerance?: number;
 }
 
+export const deliberate = (type: string): Activation =>
+  type === "touch" ? { delay: 250, tolerance: 5 } : { distance: 3 };
+
 export interface Target {
   limit(): number;
   activation(type: string): Activation;

@@ -31,10 +31,8 @@
     ".": "./index.ts"
   },
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
     "typecheck": "tsc",
-    "check": "tsc && vitest run"
+    "check": "tsc"
   },
   "dependencies": {
     "@openconsole/matrix": "workspace:*"

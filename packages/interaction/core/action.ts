@@ -1,6 +1,6 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import type { Size, State } from "../model";
+import { centroid, type Size, type State } from "../model";
 
 export interface Edges {
   readonly left: boolean;
@@ -35,14 +35,6 @@ const still: Edges = { left: false, top: false, right: false, bottom: false };
 
 export const resizes = ({ edges }: Freedom): boolean =>
   edges.left || edges.top || edges.right || edges.bottom;
-
-export function centroid(points: readonly Point<2>[]): Point<2> {
-  const sum = points.reduce(
-    (total, point) => ({ x: total.x + point.x, y: total.y + point.y }),
-    { x: 0, y: 0 },
-  );
-  return { x: sum.x / points.length, y: sum.y / points.length };
-}
 
 export function anchor(
   freedom: Freedom,

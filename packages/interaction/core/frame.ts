@@ -2,6 +2,15 @@ import { plane, type Matrix } from "@openconsole/matrix";
 
 import type { Bounds, State } from "../model";
 
+export function convert(
+  matrix: Matrix<2, "affine">,
+  from: Matrix<2, "affine">,
+  to: Matrix<2, "affine">,
+): Matrix<2, "affine"> | undefined {
+  const inverse = plane.invert(from);
+  return inverse && plane.multiply(to, inverse, matrix);
+}
+
 export function frame(
   linear: Matrix<2, "affine">,
   box: Bounds,

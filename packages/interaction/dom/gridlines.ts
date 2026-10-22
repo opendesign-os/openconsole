@@ -21,6 +21,7 @@ export function gridlines(container: HTMLElement, step: number): Plugin {
         return;
       }
       const element = container.ownerDocument.createElement("div");
+      element.dataset["layer"] = "grid";
       Object.assign(element.style, {
         position: "absolute",
         inset: "0",

@@ -17,9 +17,9 @@ export interface Grab {
   cancel(): void;
 }
 
-export function arrows(unit: number): Keys {
-  const move = (x: number, y: number): Step => ({
-    matrix: plane.translate(x * unit, y * unit),
+export function arrows(x: number, y = x): Keys {
+  const move = (right: number, down: number): Step => ({
+    matrix: plane.translate(right * x, down * y),
     space: "container",
   });
   return {

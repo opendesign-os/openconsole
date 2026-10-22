@@ -1,5 +1,7 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
+import type { Polygon } from "./geometry";
+
 export interface Size {
   readonly width: number;
   readonly height: number;
@@ -17,18 +19,6 @@ export interface Patch {
   readonly index?: number | undefined;
 }
 
-export interface Range {
-  readonly min?: number;
-  readonly max?: number;
-}
-
-export interface Bounds {
-  readonly left: number;
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-}
-
 export function merge(state: State, { matrix, size, index }: Patch): State {
   if (!matrix && !size && index === undefined) return state;
   return {
@@ -39,27 +29,15 @@ export function merge(state: State, { matrix, size, index }: Patch): State {
   };
 }
 
-export function corners(state: State): readonly Point<2>[] {
+export function corners(state: State): Polygon {
   const { width, height } = state.size;
-  const points: readonly Point<2>[] = [
+  const points: Polygon = [
     { x: 0, y: 0 },
     { x: width, y: 0 },
     { x: width, y: height },
     { x: 0, y: height },
   ];
   return points.map((point) => plane.apply(state.matrix, point));
-}
-
-export function extent(state: State): Bounds {
-  const points = corners(state);
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  return {
-    left: Math.min(...xs),
-    top: Math.min(...ys),
-    right: Math.max(...xs),
-    bottom: Math.max(...ys),
-  };
 }
 
 export const center = (state: State): Point<2> =>

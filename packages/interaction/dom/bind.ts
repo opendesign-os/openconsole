@@ -11,6 +11,7 @@ import {
 } from "../core";
 import type { Patch, State } from "../model";
 import { listen, type Grab, type Keys } from "./keyboard";
+import { hold } from "./motion";
 import {
   forget,
   register,
@@ -38,8 +39,8 @@ export interface Observer {
 
 export interface BindOptions {
   readonly action: Action;
-  readonly handle?: Element | readonly Element[];
-  readonly ignore?: Element | readonly Element[];
+  readonly handle?: Element | readonly Element[] | string;
+  readonly ignore?: Element | readonly Element[] | string;
   readonly plugins?: readonly Plugin[];
   readonly activation?: Activation | ((type: string) => Activation);
   readonly priority?: number;
@@ -61,8 +62,13 @@ export function observe(observer: Observer): () => void {
   };
 }
 
-const list = (value: Element | readonly Element[] | undefined) =>
-  value instanceof Element ? [value] : (value ?? []);
+function list(
+  node: HTMLElement,
+  value: Element | readonly Element[] | string | undefined,
+): readonly Element[] {
+  if (typeof value === "string") return [...node.querySelectorAll(value)];
+  return value instanceof Element ? [value] : (value ?? []);
+}
 
 function listener(options: BindOptions): Plugin {
   const { onStart, onMove, onEnd, onCancel } = options;
@@ -125,8 +131,8 @@ export class Binding {
       keys,
       state: () => this.#tracker.state,
     };
-    for (const element of list(options.handle)) this.handle(element);
-    for (const element of list(options.ignore)) this.ignore(element);
+    for (const element of list(node, options.handle)) this.handle(element);
+    for (const element of list(node, options.ignore)) this.ignore(element);
     this.#sync();
   }
 
@@ -141,6 +147,7 @@ export class Binding {
   start(input: Input): boolean {
     const { store } = this.#view;
     if (this.#tracker.active || !store.lock(this.#tracker)) return false;
+    hold(this.node);
     this.#view.prepare();
     const frame = this.#view.frame();
     if (!frame) {
@@ -206,11 +213,6 @@ export class Binding {
     this.#tracker.move(this.#last, frame);
     this.#commit();
     this.#notify("onMove");
-    return this;
-  }
-
-  relayout(): this {
-    this.#view.relayout();
     return this;
   }
 

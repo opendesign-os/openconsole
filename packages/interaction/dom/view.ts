@@ -1,8 +1,16 @@
 import { plane, space, type Matrix, type Point } from "@openconsole/matrix";
 
-import { frame } from "../core";
-import { Store, type Patch, type Size, type State } from "../model";
+import { convert, frame } from "../core";
 import {
+  extent,
+  Store,
+  type Bounds,
+  type Patch,
+  type Size,
+  type State,
+} from "../model";
+import {
+  client,
   computed,
   linear,
   offset,
@@ -123,13 +131,49 @@ export class View {
       this.#layout = state.size;
       this.#offset = offset(node);
     }
-    node.style.transform = space.format(
-      space.lift(
-        plane.multiply(
-          plane.translate(-this.#offset.x, -this.#offset.y),
-          state.matrix,
-        ),
-      ),
+    const matrix = plane.multiply(
+      plane.translate(-this.#offset.x, -this.#offset.y),
+      state.matrix,
     );
+    node.style.transform = plane.equals(matrix, plane.identity)
+      ? "none"
+      : space.format(space.lift(matrix));
   }
+}
+
+export function transfer(node: HTMLElement, container: HTMLElement): boolean {
+  const view = View.of(node);
+  if (node.parentElement === container || view.store.locked) return false;
+  view.prepare();
+  const before = view.frame();
+  const { matrix, size } = view.store.state;
+  container.append(node);
+  view.prepare();
+  const after = view.frame();
+  const next = before && after && convert(matrix, before, after);
+  if (next) view.store.assign({ matrix: next, size });
+  return true;
+}
+
+export const area =
+  (container: HTMLElement, node: HTMLElement) => (): Bounds => {
+    const whole = {
+      left: 0,
+      top: 0,
+      right: container.clientWidth,
+      bottom: container.clientHeight,
+    };
+    if (node.offsetParent === container) return whole;
+    const frame = View.of(node).frame();
+    const polygon = client(container);
+    if (!frame || !polygon) return whole;
+    return extent(polygon.map((point) => plane.apply(frame, point)));
+  };
+
+export function reset(node: HTMLElement): void {
+  const view = View.of(node);
+  view.relayout();
+  view.store.assign({
+    matrix: plane.translate(node.offsetLeft, node.offsetTop),
+  });
 }

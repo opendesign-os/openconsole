@@ -25,6 +25,9 @@ export const closest: Slot = (point, boxes) => {
   return index;
 };
 
+export const rank = (value: number, middles: readonly number[]): number =>
+  middles.filter((middle) => middle < value).length;
+
 const span = (from: number, to: number): number[] =>
   Array.from({ length: Math.max(0, to - from) }, (_, offset) => from + offset);
 

@@ -95,19 +95,6 @@ importers:
         specifier: workspace:*
         version: link:../matrix
 
-  packages/interaction/examples:
-    dependencies:
-      '@openconsole/interaction':
-        specifier: workspace:*
-        version: link:..
-      '@openconsole/matrix':
-        specifier: workspace:*
-        version: link:../../matrix
-    devDependencies:
-      vite:
-        specifier: ^8.3.1
-        version: 8.3.1(@types/node@26.6.3)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
-
   packages/matrix: {}
 
   packages/mcp:

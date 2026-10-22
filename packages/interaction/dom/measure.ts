@@ -1,6 +1,13 @@
 import { plane, type Matrix, type Point } from "@openconsole/matrix";
 
-import type { Bounds, Range, Size } from "../model";
+import { frame, type Context } from "../core";
+import {
+  corners,
+  type Bounds,
+  type Polygon,
+  type Range,
+  type Size,
+} from "../model";
 import { local, type Computed } from "./style";
 
 type Axis = "width" | "height";
@@ -31,13 +38,6 @@ export function rect(node: Element): Bounds {
   const { left, top, right, bottom } = node.getBoundingClientRect();
   return { left, top, right, bottom };
 }
-
-export const area = (container: HTMLElement) => (): Bounds => ({
-  left: 0,
-  top: 0,
-  right: container.clientWidth,
-  bottom: container.clientHeight,
-});
 
 export const box = (node: HTMLElement): Bounds => ({
   left: node.offsetLeft,
@@ -91,6 +91,79 @@ export function write(node: HTMLElement, size: Size): void {
   node.style.width = `${Math.max(0, size.width - inset(style, "width"))}px`;
   node.style.height = `${Math.max(0, size.height - inset(style, "height"))}px`;
 }
+
+export function intrinsic(node: HTMLElement, width: number): number {
+  const saved = { width: node.style.width, height: node.style.height };
+  const extra = inset(getComputedStyle(node), "width");
+  node.style.width = `${Math.max(0, width - extra)}px`;
+  node.style.height = "auto";
+  const { height } = size(node);
+  Object.assign(node.style, saved);
+  return height;
+}
+
+function pose(node: HTMLElement, box: Size): Matrix<2, "affine"> | undefined {
+  const inverse = frame(plane.multiply(linear(node), own(node)), rect(node), {
+    matrix: plane.identity,
+    size: box,
+  });
+  return inverse && plane.invert(inverse);
+}
+
+export function outline(node: HTMLElement): Polygon | undefined {
+  const box = size(node);
+  const matrix = pose(node, box);
+  return matrix && corners({ matrix, size: box });
+}
+
+export function inward(node: HTMLElement): Matrix<2, "affine"> | undefined {
+  const matrix = pose(node, size(node));
+  const shift = plane.translate(
+    node.clientLeft - node.scrollLeft,
+    node.clientTop - node.scrollTop,
+  );
+  return matrix && plane.invert(plane.multiply(matrix, shift));
+}
+
+export function client(node: HTMLElement): Polygon | undefined {
+  const matrix = pose(node, size(node));
+  return (
+    matrix &&
+    corners({
+      matrix: plane.multiply(
+        matrix,
+        plane.translate(node.clientLeft, node.clientTop),
+      ),
+      size: { width: node.clientWidth, height: node.clientHeight },
+    })
+  );
+}
+
+export const layered = (element: Element): boolean =>
+  element instanceof HTMLElement && element.dataset["layer"] !== undefined;
+
+function targets(
+  node: HTMLElement,
+  value: true | string,
+  root: ParentNode,
+): Element[] {
+  if (typeof value === "string") return [...root.querySelectorAll(value)];
+  const parent = node.parentElement;
+  if (!parent) return [];
+  return [parent, ...[...parent.children].filter((child) => !layered(child))];
+}
+
+export const outlines =
+  (node: HTMLElement, value: true | string, root: ParentNode) =>
+  (context: Pick<Context, "frame">): Polygon[] =>
+    targets(node, value, root).flatMap((element) => {
+      if (node.contains(element) || !(element instanceof HTMLElement)) {
+        return [];
+      }
+      const polygon = outline(element);
+      if (!polygon) return [];
+      return [polygon.map((point) => plane.apply(context.frame, point))];
+    });
 
 export function range(node: HTMLElement, axis: Axis): Range {
   const style = getComputedStyle(node);

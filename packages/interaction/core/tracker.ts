@@ -159,9 +159,9 @@ export class Tracker {
   nudge(step: Step): this {
     const session = this.#session;
     if (!session) return this;
-    const matrix = apply(step, session.frame, session.raw.matrix);
+    const matrix = apply(step, session.frame, this.#state.matrix);
     if (!matrix) return this;
-    session.raw = { ...session.raw, matrix };
+    session.raw = { ...this.#state, matrix };
     session.base = session.raw;
     session.from = session.points;
     this.#commit(session);
@@ -183,9 +183,9 @@ export class Tracker {
     const session = this.#session;
     if (!session) return this;
     this.#session = undefined;
+    this.#change(session.origin);
     const context = this.#context(session, session.origin);
     for (const plugin of this.#plugins) plugin.onCancel?.(context);
-    this.#change(session.origin);
     this.#flush();
     return this;
   }

@@ -1,18 +1,24 @@
 import { plane, type Point } from "@openconsole/matrix";
 
-import { centroid, choose, frame, type Candidate } from "../core";
-import { linear, observe, own, rect, size, type Session } from "../dom";
+import { choose, type Candidate } from "../core";
+import { observe, outline, type Session } from "../dom";
 import {
+  area,
   Capability,
-  center,
+  centroid,
+  contains,
+  corners,
+  intersect,
   type CapabilityOptions,
   type Part,
+  type Polygon,
 } from "../model";
 
 export interface Drag {
   readonly node: HTMLElement;
   readonly data: unknown;
   readonly point: Point<2>;
+  readonly shape: Polygon;
 }
 
 export type Detect = (zone: HTMLElement, drag: Drag) => number | undefined;
@@ -27,32 +33,43 @@ export interface DroppableOptions extends CapabilityOptions {
 }
 
 export function within(zone: HTMLElement, drag: Drag): number | undefined {
-  const box = size(zone);
-  const inverse = frame(plane.multiply(linear(zone), own(zone)), rect(zone), {
-    matrix: plane.identity,
-    size: box,
-  });
-  if (!inverse) return undefined;
-  const { x, y } = plane.apply(inverse, drag.point);
-  return x >= 0 && y >= 0 && x <= box.width && y <= box.height ? 1 : undefined;
+  const polygon = outline(zone);
+  return polygon && contains(polygon, drag.point) ? 1 : undefined;
+}
+
+export function overlap(zone: HTMLElement, drag: Drag): number | undefined {
+  const polygon = outline(zone);
+  if (!polygon) return undefined;
+  const shared = area(intersect(drag.shape, polygon));
+  const union = area(drag.shape) + area(polygon) - shared;
+  return shared > 0 ? shared / union : undefined;
+}
+
+export function nearest(zone: HTMLElement, drag: Drag): number | undefined {
+  const polygon = outline(zone);
+  if (!polygon) return undefined;
+  const from = centroid(drag.shape);
+  const to = centroid(polygon);
+  return -Math.hypot(to.x - from.x, to.y - from.y);
 }
 
 const zones = new Map<HTMLElement, DroppableOptions>();
 let over: HTMLElement | undefined;
 
-function locate(session: Session): Point<2> {
-  const { points } = session.input;
-  if (points.length > 0) return centroid(points);
+function describe(session: Session): Drag {
   const inverse = plane.invert(session.frame);
-  const middle = center(session.state);
-  return inverse ? plane.apply(inverse, middle) : middle;
+  const polygon = corners(session.state);
+  const shape = inverse
+    ? polygon.map((point) => plane.apply(inverse, point))
+    : polygon;
+  const { points } = session.input;
+  return {
+    node: session.node,
+    data: session.data,
+    point: centroid(points.length > 0 ? points : shape),
+    shape,
+  };
 }
-
-const describe = (session: Session): Drag => ({
-  node: session.node,
-  data: session.data,
-  point: locate(session),
-});
 
 function hit(drag: Drag): HTMLElement | undefined {
   const candidates: Candidate<HTMLElement>[] = [];

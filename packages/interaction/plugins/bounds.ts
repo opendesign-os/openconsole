@@ -87,10 +87,10 @@ export function bounds(measure: () => Bounds): Plugin {
       area = measure();
     },
     onMove: ({ state, origin, previous, action: { freedom } }) => {
-      const box = extent(state);
+      const box = extent(corners(state));
       if (inside(box, area)) return undefined;
       if (resizes(freedom)) {
-        return inside(extent(origin), area)
+        return inside(extent(corners(origin)), area)
           ? fit(state, origin, freedom.edges, area)
           : undefined;
       }

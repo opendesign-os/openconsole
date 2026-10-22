@@ -11,8 +11,12 @@ import {
 import {
   bind,
   box,
-  linear,
-  type Activation,
+  deliberate,
+  play,
+  raise,
+  record,
+  restore,
+  View,
   type Binding,
   type BindOptions,
   type Keys,
@@ -48,39 +52,6 @@ export interface SortableOptions
   readonly onSort?: (sort: Sort) => void;
 }
 
-const select = (item: HTMLElement, selector: string | undefined) =>
-  selector ? [...item.querySelectorAll(selector)] : [];
-
-const activation = (type: string): Activation =>
-  type === "touch" ? { delay: 250, tolerance: 5 } : { distance: 3 };
-
-function record(elements: readonly HTMLElement[]): Map<HTMLElement, DOMRect> {
-  return new Map(
-    elements.map((element): [HTMLElement, DOMRect] => [
-      element,
-      element.getBoundingClientRect(),
-    ]),
-  );
-}
-
-function play(rects: Map<HTMLElement, DOMRect>, duration: number): void {
-  if (duration <= 0) return;
-  for (const [element, before] of rects) {
-    const after = element.getBoundingClientRect();
-    const inverse = plane.invert(linear(element));
-    if (!inverse) continue;
-    const shift = plane.apply(inverse, {
-      x: before.left - after.left,
-      y: before.top - after.top,
-    });
-    if (Math.hypot(shift.x, shift.y) < 0.5) continue;
-    element.animate(
-      [{ translate: `${shift.x}px ${shift.y}px` }, { translate: "0px 0px" }],
-      { duration, easing: "ease" },
-    );
-  }
-}
-
 export class Sortable extends Capability<
   HTMLElement,
   SortableOptions,
@@ -107,13 +78,11 @@ export class Sortable extends Capability<
   }
 
   protected build(): readonly Part<Binding>[] {
-    const { handle, ignore, plugins = [] } = this.options;
+    const { plugins = [] } = this.options;
     return this.items.map((item, index) =>
       bind(item, {
-        activation,
+        activation: deliberate,
         ...this.options,
-        handle: select(item, handle),
-        ignore: select(item, ignore),
         action: transform({ translate: true }),
         plugins: [this.#slot(), ...plugins, this.#apply(item)],
         keys: this.#keys(item),
@@ -135,43 +104,25 @@ export class Sortable extends Capability<
 
   #apply(item: HTMLElement): Plugin {
     let from = -1;
-    let layer: { position: string; zIndex: string } | undefined;
-    const lift = () => {
-      layer = { position: item.style.position, zIndex: item.style.zIndex };
-      if (getComputedStyle(item).position === "static") {
-        item.style.position = "relative";
-      }
-      item.style.zIndex = "1";
-    };
-    const drop = () => {
-      if (!layer) return;
-      item.style.position = layer.position;
-      item.style.zIndex = layer.zIndex;
-      layer = undefined;
-    };
-    const settle = (restore: boolean) => {
+    let lower: (() => void) | undefined;
+    const settle = (back: boolean) => {
       const start = from;
       from = -1;
-      if (restore) this.#reorder(item, start);
-      const before = record([item]);
-      const binding = this.#binding(item);
-      binding?.relayout();
-      binding?.assign({
-        matrix: plane.translate(item.offsetLeft, item.offsetTop),
-      });
-      play(before, this.options.duration ?? 150);
-      drop();
+      if (back) this.#reorder(item, start);
+      restore(item, this.options.duration ?? 150);
+      lower?.();
+      lower = undefined;
       this.#index();
-      if (!restore) this.#announce(item, start);
+      if (!back) this.#announce(item, start);
     };
     return {
       onStart: () => {
         from = this.items.indexOf(item);
-        lift();
+        lower = raise(item);
       },
       onChange: ({ state }) => {
         if (from < 0 || state.index === undefined) return;
-        if (this.#reorder(item, state.index)) this.#binding(item)?.relayout();
+        if (this.#reorder(item, state.index)) View.of(item).relayout();
       },
       onEnd: () => settle(false),
       onCancel: () => settle(true),
@@ -216,10 +167,6 @@ export class Sortable extends Capability<
     item.after(...nodes(after));
     play(rects, this.options.duration ?? 150);
     return true;
-  }
-
-  #binding(item: HTMLElement): Binding | undefined {
-    return this.units.find((binding) => binding.node === item);
   }
 
   #index(): void {

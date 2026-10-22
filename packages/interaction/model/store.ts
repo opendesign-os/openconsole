@@ -6,7 +6,7 @@ export interface Member {
 
 export class Store {
   #state: State;
-  #owner: Member | undefined;
+  #active: Member | undefined;
   readonly #members = new Set<Member>();
   readonly #listen: (state: State, patch: Patch) => void;
 
@@ -22,6 +22,10 @@ export class Store {
     return this.#state;
   }
 
+  get locked(): boolean {
+    return this.#active !== undefined;
+  }
+
   join(member: Member): void {
     this.#members.add(member);
     member.assign(this.#state);
@@ -33,13 +37,13 @@ export class Store {
   }
 
   lock(member: Member): boolean {
-    if (this.#owner && this.#owner !== member) return false;
-    this.#owner = member;
+    if (this.#active && this.#active !== member) return false;
+    this.#active = member;
     return true;
   }
 
   unlock(member: Member): void {
-    if (this.#owner === member) this.#owner = undefined;
+    if (this.#active === member) this.#active = undefined;
   }
 
   commit(patch: Patch, source?: Member): boolean {
@@ -54,6 +58,6 @@ export class Store {
   }
 
   assign(patch: Patch): boolean {
-    return this.#owner === undefined && this.commit(patch);
+    return !this.locked && this.commit(patch);
   }
 }
