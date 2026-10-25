@@ -217,7 +217,7 @@ describe("reshape", () => {
     const reshaped = vi.fn();
     graph.signal.on("nodeReshaped", reshaped);
     const order: string[] = [];
-    graph.signal.watch((type) => order.push(type));
+    graph.signal.on("*", (type) => order.push(type));
 
     graph.batch(() => {
       graph.reshape(branch, { outputs: { true: exec(false) } });

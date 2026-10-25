@@ -8,11 +8,11 @@
 - **载荷必填性由类型决定**:`emit` 走可变长元组,只有载荷域含 `undefined`(`void` / `T | undefined`)的事件才允许省略实参
 - `*` 通配符监听全部事件;`Watcher` 是泛型签名,键与载荷保持相关
 - `once()` 一次性监听,并可通过原始 handler 在触发前手动 `off`
-- `on()` 支持 `AbortSignal`:abort 即自动取消订阅,且**任何**移除路径都会摘掉 abort 监听
+- `AbortSignal` 集成:abort 即自动取消订阅,且**任何**移除路径都会摘掉 abort 监听
 - `Symbol.dispose` 集成:`using signal = new Signal()` 自动 `clear()`
 - `emit()` 返回 `boolean`(是否有监听器接收)
-- 反射 API:`count` / `has` / `names` / `listeners` / `snapshot`(只读)
-- 派发期间对监听器列表取快照,handler 内部 `on/off` 不影响当次派发
+- 反射 API:`has` / `count` / `names` / `listeners`
+- 监听器桶写时复制:派发不拷贝快照,handler 内部 `on/off` 也不影响当次派发
 - 可选 `rescue` 钩子接管 handler 异常,emit 继续向后派发
 - 零运行时依赖,内部状态不外泄(无可变的公开注册表)
 
@@ -60,12 +60,13 @@ signal.on("error", (e: string) => {}); // ✗ 载荷应为 Error
 
 ### 通配符监听
 
+`'*'` 是保留键,与具体事件共用 `on` / `once` / `off` / `has` / `count` / `listeners`,
+只是 handler 形态多一个事件名:
+
 ```ts
-signal.watch((type, event) => {
+signal.on("*", (type, event) => {
   console.log(`[event] ${String(type)}`, event);
 });
-
-// 等价 signal.on('*', ...);
 ```
 
 ### 一次性监听
@@ -75,7 +76,7 @@ const handler = (error: Error) => console.error(error.message);
 
 signal.once("error", handler);
 
-// 触发前手动取消也可以(通过原 handler 反查 wrapper):
+// 触发前手动取消也可以(内部按原 handler 反查包装函数):
 signal.off("error", handler);
 ```
 
@@ -120,14 +121,13 @@ const signal = new Signal<AppEvents>({
 ```ts
 signal.has(); // 全图是否有监听器
 signal.has("user:login"); // 指定事件键
-signal.count("user:login");
-signal.names(); // 有监听器的事件键;'*' 若有则排末位
+signal.count("user:login"); // 监听器数
+signal.names(); // 有监听器的事件键,按首次注册顺序,'*' 以保留键出现
 signal.listeners("user:login"); // 浅拷贝,外部修改不影响内部
-signal.snapshot(); // 全部监听器的只读快照(ReadonlyMap)
 ```
 
-> 内部注册表不对外暴露可变引用:`listeners()` 返回拷贝,`snapshot()` 的类型是
-> `ReadonlyMap<Key, ReadonlyArray<Listener>>`,外部无法借反射 API 改动内部状态。
+> 反射 API 不漏出可变引用:`listeners()` 返回拷贝,内部桶不外泄,
+> 外部无法借反射 API 改动内部状态。
 
 ### 清理
 
@@ -141,7 +141,7 @@ signal[Symbol.dispose](); // 等价 clear()
 
 ### `class Signal<E>` / `interface Emitter<E>`
 
-泛型 `E` 是事件名到载荷类型的映射。
+泛型 `E` 是事件名到载荷类型的映射;`type` 处处可传具体事件键或 `'*'`。
 
 | 方法                            | 说明                                      | 返回                    |
 | ------------------------------- | ----------------------------------------- | ----------------------- |
@@ -149,13 +149,10 @@ signal[Symbol.dispose](); // 等价 clear()
 | `once(type, handler, options?)` | 注册一次性监听                            | `Unsubscribe`(幂等)     |
 | `off(type, handler?)`           | 取消监听(handler 省略 = 移除该事件下全部) | `void`                  |
 | `emit(type, ...payload)`        | 派发事件;载荷必填性见 `Payload<E, K>`     | `boolean`(是否有人接收) |
-| `watch(handler, options?)`      | `on('*', handler, ...)` 别名              | `Unsubscribe`           |
-| `unwatch(handler?)`             | `off('*', handler?)` 别名                 | `void`                  |
 | `has(type?)`                    | 是否存在监听器(无参数 = 全图)             | `boolean`               |
 | `count(type)`                   | 监听器数                                  | `number`                |
-| `names()`                       | 有监听器的事件键,`'*'` 排末位             | `Array<Key \| '*'>`     |
+| `names()`                       | 有监听器的事件键,按首次注册顺序           | `Array<Key \| '*'>`     |
 | `listeners(type)`               | 监听器列表浅拷贝                          | `Array<Listener>`       |
-| `snapshot()`                    | 全部监听器的只读快照                      | `Registry<E>`           |
 | `clear()`                       | 清空全部监听器                            | `void`                  |
 | `[Symbol.dispose]()`            | `clear()` 的 Disposable 别名              | `void`                  |
 
@@ -174,8 +171,6 @@ type Payload<E, K> = undefined extends E[K] ? [event?: E[K]] : [event: E[K]];
 interface Options {
   /** abort 时自动取消订阅 */
   signal?: AbortSignal;
-  /** 一次性触发 */
-  once?: boolean;
 }
 ```
 
@@ -191,30 +186,29 @@ interface Init<E> {
 ## 行为说明
 
 - **派发顺序**:先具体事件 handler,再通配符 handler。
-- **派发快照**:emit 前对监听器列表取快照,handler 内部 `on/off` 不影响当次派发(但下一次 emit 反映新状态)。单监听器(最常见)走直接调用,不分配快照数组。
+- **派发隔离**:监听器桶写时复制(增删整桶换新),派发中的那一份数组不会被改写,handler 内部 `on/off` 不影响当次派发(但下一次 emit 反映新状态)。
 - **重复注册**:同一 handler 多次 `on()` 会被多次注册并多次调用;每次 `off()` 只移除一份;`on()` 返回的 unsubscribe 只负责它自己那一份,且幂等。
-- **`once` 反向 off**:`off(type, originalHandler)` 通过内部 `WeakMap<wrapper, source>` 反查包装函数,可正常解绑。
+- **`once` 反向 off**:`off(type, originalHandler)` 通过内部 `WeakMap<wrapper, source>` 反查包装函数,可正常解绑;包装函数先解绑再调用原 handler,原 handler 抛错也不残留注册。
 - **异常处理**:默认 handler 抛错会中断当次 emit 剩余派发;构造时传 `rescue` 则吞错继续。
-- **AbortSignal**:`on()` 时若 signal 已 aborted,直接 no-op 不注册;订阅被任何方式移除时,abort 监听同步摘除。
-- **`'*'` 是保留键**:即使事件映射里真有一个名为 `'*'` 的事件,`on('*')` 也按通配符处理。
+- **AbortSignal**:注册时若 signal 已 aborted,直接 no-op 不注册;订阅被任何方式移除时,abort 监听同步摘除。
+- **`'*'` 是保留键**:即使事件映射里真有一个名为 `'*'` 的事件,`on('*')` 也按通配符注册;`emit('*')` 则只通知通配符监听器一轮,事件名为 `'*'`。
 
 ## 类型安全实现要点
 
-- **分桶存储**:具体事件 handler 与通配符 watcher 分开存放,派发路径上不存在
-  `Handler | Watcher` 联合,因此调用点无需把载荷断言回具体类型。
+- **一张注册表**:具体事件与通配符同住一个 `Map`,通配符占 `'*'` 桶,反射 API 因此只有一套键空间,不另开 watcher 专用入口。
 - **`Watcher` 是泛型签名**:`<K>(type: K, event: E[K]) => void`,键与载荷保持相关。
-- **断言只剩 4 处边界**,且都带注释说明为何编译器看不到:两处重载实现签名
-  (`on` / `once` 无法表达 type 与 handler 的相关性)、一处异构容器写入
-  (`Map<Key, Handler<全键载荷联合>>`)、一处可变长元组取值。其余实现全部类型自洽。
-- **tsconfig 开满**:继承 `@openconsole/tsconfig/strict`,含
-  `noUncheckedIndexedAccess` 与 `exactOptionalPropertyTypes`;实现里无非空断言(`!`)。
+- **写时复制**:增删整桶换新,派发因此零拷贝、也不必防着 handler 内部增删;拷贝只留在 `listeners()` 这条冷路径上(桶若改为冻结,派发遍历会慢数倍,得不偿失)。
+- **断言只剩 4 处边界**,且都带注释说明为何编译器看不到:`emit` 里的两处取桶
+  (异构容器,桶与元素形态的对应关系由 `on` / `once` 的重载保证)、一处可变长元组取值,
+  以及 `once` 包装的变长实参转调。其余实现全部类型自洽,无非空断言(`!`)。
+- **严格度**:继承 `@openconsole/tsconfig/strict`(含 `noUncheckedIndexedAccess`
+  与 `exactOptionalPropertyTypes`);该预设目前未开 `strict` 总开关,本包的实现
+  在 `tsc --strict` 下同样零报错。
 
 ## 开发
 
 ```bash
-pnpm --filter @openconsole/signal check    # tsc + tests
-pnpm --filter @openconsole/signal test
-pnpm --filter @openconsole/signal typecheck
+pnpm --filter @openconsole/signal check
 ```
 
 ## License

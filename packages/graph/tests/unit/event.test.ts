@@ -11,7 +11,7 @@ const c = nodeId("c");
 /** 记录派发到的事件类型；`flushed` 是事务边界信号，多数用例不关心。 */
 function record(graph: Graph<string, number>, boundaries = true): string[] {
   const seen: string[] = [];
-  graph.signal.watch((type) => {
+  graph.signal.on("*", (type) => {
     if (boundaries || type !== "flushed") seen.push(type);
   });
   return seen;
@@ -144,7 +144,7 @@ describe("事务", () => {
 
     let grown = false;
     const seen = record(graph);
-    graph.signal.watch((type) => {
+    graph.signal.on("*", (type) => {
       // 内层变更必须排在本段事务剩余事件之后，而不是抢先把 flushed 放掉。
       if (type === "nodeUpdated" && !grown) {
         grown = true;
