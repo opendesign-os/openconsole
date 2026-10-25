@@ -320,7 +320,7 @@ export class Signal<E extends object = Record<string, unknown>>
     options?: Options,
   ): Unsubscribe {
     let dispose: Unsubscribe = noop;
-    dispose = this._add(type, this._wrap(handler, () => dispose()), options);
+    dispose = this._add(type, this._once(handler, () => dispose()), options);
     return dispose;
   }
 
@@ -374,7 +374,7 @@ export class Signal<E extends object = Record<string, unknown>>
           try {
             handler(event);
           } catch (error) {
-            this._fail(error, type, handler);
+            this._catch(error, type, handler);
           }
         }
       }
@@ -390,7 +390,7 @@ export class Signal<E extends object = Record<string, unknown>>
         try {
           watcher(type, event);
         } catch (error) {
-          this._fail(error, "*", watcher);
+          this._catch(error, "*", watcher);
         }
       }
     }
@@ -456,7 +456,7 @@ export class Signal<E extends object = Record<string, unknown>>
    * 注册的公共收口：入桶、`AbortSignal` 联动与幂等 unsubscribe 都在这里。
    *
    * @param type 事件键，或通配符 `'*'`。
-   * @param handler 入桶的监听器，可能是 {@link Signal._wrap} 给的包装。
+   * @param handler 入桶的监听器，可能是 {@link Signal._once} 给的包装。
    * @param options 订阅选项。
    * @returns 取消订阅函数，幂等；signal 注册时已 aborted 则为空函数。
    *
@@ -510,7 +510,7 @@ export class Signal<E extends object = Record<string, unknown>>
    *   断言只因编译器看不到「包装谁，就按谁的形态被调用」这层对应关系。
    *   先解绑后调用，即便原 handler 抛错也不会残留注册。
    */
-  private _wrap(handler: Listener<E>, dispose: Unsubscribe): Listener<E> {
+  private _once(handler: Listener<E>, dispose: Unsubscribe): Listener<E> {
     const call = handler as (...args: unknown[]) => void;
     const wrapped: Listener<E> = (...args: unknown[]): void => {
       dispose();
@@ -566,7 +566,7 @@ export class Signal<E extends object = Record<string, unknown>>
    * @param handler 抛错的监听器。
    * @throws 未提供 {@link Init.rescue} 时原样上抛，中断当次 emit；否则吞到钩子里继续派发
    */
-  private _fail(
+  private _catch(
     error: unknown,
     type: EventType<E> | Wildcard,
     handler: Listener<E>,
