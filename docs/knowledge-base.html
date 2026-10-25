@@ -1,0 +1,2162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG 知识库工程方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Spectral:ital,wght@0,500;0,600;1,400&display=swap">
+
+<style>
+  /* 工程手册布局：左侧常驻目录 + 单栏正文；等宽承担编号与数据，衬线只点缀英文 */
+  :root {
+    --bg: #f4f6f7;
+    --surface: #ffffff;
+    --surface-sunk: #eceff1;
+    --fg: #16202b;
+    --fg-soft: #3d4c5a;
+    --muted: #64747f;
+    --line: #dbe1e6;
+    --line-strong: #c3ccd3;
+    --accent: #15528c;
+    --accent-soft: #e4edf7;
+    --warm: #9c5a16;
+    --warm-soft: #f7ecdd;
+    --good: #1c6647;
+    --bad: #9a3033;
+    --bad-soft: #f8e7e7;
+    --good-soft: #e2f1e9;
+    --mark: #15528c;
+    --mark-dim: #8795a1;
+
+    --font-sans: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    --font-serif: "Spectral", Georgia, serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1318;
+      --surface: #151d24;
+      --surface-sunk: #1b242c;
+      --fg: #e2e8ed;
+      --fg-soft: #c2ccd4;
+      --muted: #8795a1;
+      --line: #25313a;
+      --line-strong: #35434e;
+      --accent: #74a9e8;
+      --accent-soft: #15283e;
+      --warm: #d9974f;
+      --warm-soft: #2e2317;
+      --good: #58b78c;
+      --bad: #e0767a;
+      --bad-soft: #321c1e;
+      --good-soft: #13281e;
+      --mark: #5f97da;
+      --mark-dim: #5d6b77;
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0d1318;
+    --surface: #151d24;
+    --surface-sunk: #1b242c;
+    --fg: #e2e8ed;
+    --fg-soft: #c2ccd4;
+    --muted: #8795a1;
+    --line: #25313a;
+    --line-strong: #35434e;
+    --accent: #74a9e8;
+    --accent-soft: #15283e;
+    --warm: #d9974f;
+    --warm-soft: #2e2317;
+    --good: #58b78c;
+    --bad: #e0767a;
+    --bad-soft: #321c1e;
+    --good-soft: #13281e;
+    --mark: #5f97da;
+    --mark-dim: #5d6b77;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.78;
+    -webkit-font-smoothing: antialiased;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 0 72px;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0 0 auto;
+    height: env(safe-area-inset-top, 0px);
+    background: var(--bg);
+    z-index: 20;
+  }
+
+  #progress {
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    left: 0;
+    height: 2px;
+    width: 0;
+    background: var(--accent);
+    z-index: 21;
+    transition: width .1s linear;
+  }
+
+  .shell {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 48px;
+  }
+
+  /* ---------- hero ---------- */
+
+  header.hero {
+    padding-block: 56px 36px;
+    border-bottom: 1px solid var(--line-strong);
+    grid-column: 1 / -1;
+  }
+
+  .eyebrow {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 1rem;
+    color: var(--warm);
+    letter-spacing: .01em;
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-size: clamp(2.1rem, 5.6vw, 3.2rem);
+    line-height: 1.16;
+    letter-spacing: -.025em;
+    font-weight: 700;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+
+  .lede {
+    font-size: 1.08rem;
+    color: var(--fg-soft);
+    max-width: 60ch;
+    margin: 0 0 28px;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    font-family: var(--font-mono);
+    font-size: .76rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .meta-row span strong {
+    color: var(--fg-soft);
+    font-weight: 500;
+  }
+
+  /* ---------- toc ---------- */
+
+  nav.toc {
+    grid-column: 1 / -1;
+  }
+
+  .toc-title {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+
+  .toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .toc a {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 7px 10px;
+    border-radius: 4px;
+    color: var(--fg-soft);
+    text-decoration: none;
+    font-size: .88rem;
+    line-height: 1.4;
+    border-left: 2px solid transparent;
+  }
+
+  .toc a .n {
+    font-family: var(--font-serif);
+    font-size: .92rem;
+    color: var(--muted);
+    min-width: 1.1em;
+  }
+
+  .toc a:hover { background: var(--surface-sunk); color: var(--fg); }
+
+  .toc a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .toc a.active .n { color: var(--accent); }
+
+  /* ---------- main ---------- */
+
+  main { grid-column: 1 / -1; min-width: 0; }
+
+  section { padding-block: 44px 8px; scroll-margin-top: 24px; }
+  section + section { border-top: 1px solid var(--line); }
+
+  .sec-head {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    margin-bottom: 10px;
+  }
+
+  .sec-num {
+    font-family: var(--font-serif);
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--warm);
+    line-height: 1;
+    min-width: 1.4em;
+  }
+
+  h2 {
+    font-size: clamp(1.4rem, 3.4vw, 1.75rem);
+    letter-spacing: -.018em;
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .sec-sub {
+    color: var(--muted);
+    font-size: .95rem;
+    margin: 0 0 24px;
+    padding-left: calc(1.4em + 16px);
+  }
+
+  h3 {
+    font-size: 1.08rem;
+    font-weight: 600;
+    letter-spacing: -.01em;
+    margin: 34px 0 12px;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+  }
+
+  h3 .h3n {
+    font-family: var(--font-mono);
+    font-size: .8rem;
+    font-weight: 500;
+    color: var(--accent);
+  }
+
+  h4 {
+    font-size: .95rem;
+    font-weight: 600;
+    margin: 24px 0 8px;
+    color: var(--fg-soft);
+  }
+
+  p { margin: 0 0 14px; max-width: 72ch; }
+  main ul, main ol { margin: 0 0 16px; padding-left: 1.3em; max-width: 72ch; }
+  main li { margin-bottom: 7px; }
+  main li::marker { color: var(--muted); }
+
+  strong { font-weight: 600; }
+  em { font-style: normal; color: var(--warm); font-weight: 500; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: .86em;
+    background: var(--surface-sunk);
+    padding: .1em .38em;
+    border-radius: 3px;
+  }
+
+  pre {
+    background: var(--surface-sunk);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+    font-size: .82rem;
+    line-height: 1.7;
+  }
+
+  pre code { background: none; padding: 0; font-size: 1em; }
+
+  .cm { color: var(--muted); }
+  .kw { color: var(--accent); }
+  .st { color: var(--good); }
+
+  /* ---------- tables ---------- */
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 0 0 20px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: .88rem;
+    min-width: 440px;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    line-height: 1.6;
+  }
+
+  th {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    white-space: nowrap;
+    background: var(--surface-sunk);
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: .84rem; white-space: nowrap; }
+  td strong { color: var(--fg); }
+
+  /* ---------- callouts ---------- */
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 14px 18px;
+    border-radius: 0 5px 5px 0;
+    margin: 0 0 20px;
+    font-size: .93rem;
+  }
+
+  .callout p:last-child { margin-bottom: 0; }
+
+  .callout.warn { border-left-color: var(--warm); background: var(--warm-soft); }
+
+  .callout .tag {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+
+  .callout.warn .tag { color: var(--warm); }
+
+  /* ---------- figures ---------- */
+
+  .fig { margin: 8px 0 26px; }
+
+  .fig-canvas {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px 16px 14px;
+    overflow-x: auto;
+  }
+
+  .fig svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-width: calc(var(--w) * .8px);
+    color: var(--fg);
+    font-family: var(--font-sans);
+  }
+
+  .fig figcaption {
+    font-size: .84rem;
+    line-height: 1.65;
+    color: var(--muted);
+    margin-top: 10px;
+    max-width: 76ch;
+  }
+
+  .fig-n {
+    font-family: var(--font-mono);
+    font-size: .74rem;
+    letter-spacing: .06em;
+    color: var(--accent);
+    margin-right: 10px;
+  }
+
+  .fig text { fill: currentColor; font-size: 13px; }
+  .fig .md { font-size: 12px; }
+  .fig .sm { font-size: 11px; }
+  .fig .xs { font-size: 10.5px; }
+  .fig .cap { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .08em; fill: var(--muted); }
+  .fig .mono { font-family: var(--font-mono); }
+  .fig .serif { font-family: var(--font-serif); font-size: 16px; }
+  .fig .b { font-weight: 600; }
+  .fig .c { text-anchor: middle; }
+  .fig .e { text-anchor: end; }
+  .fig .mute { fill: var(--muted); }
+  .fig .soft { fill: var(--fg-soft); }
+  .fig .t-acc { fill: var(--accent); }
+  .fig .t-warm { fill: var(--warm); }
+  .fig .t-bad { fill: var(--bad); }
+  .fig .t-good { fill: var(--good); }
+
+  .fig .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+  .fig .sunk { fill: var(--surface-sunk); stroke: var(--line-strong); stroke-width: 1; }
+  .fig .acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; }
+  .fig .warm { fill: var(--warm-soft); stroke: var(--warm); stroke-width: 1.3; }
+  .fig .bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.3; }
+  .fig .good { fill: var(--good-soft); stroke: var(--good); stroke-width: 1.3; }
+  .fig .band { fill: var(--surface-sunk); }
+  .fig .ghost { fill: none; stroke: var(--line-strong); stroke-width: 1.2; stroke-dasharray: 4 3; }
+  .fig .hl-warm { fill: var(--warm-soft); }
+  .fig .ring-warm { fill: none; stroke: var(--warm); stroke-width: 1.4; stroke-dasharray: 5 3; }
+  .fig .ring-acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; stroke-dasharray: 5 3; }
+
+  .fig .ln { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+  .fig .ln-acc { fill: none; stroke: var(--accent); stroke-width: 1.8; }
+  .fig .ln-warm { fill: none; stroke: var(--warm); stroke-width: 1.6; }
+  .fig .ln-bad { fill: none; stroke: var(--bad); stroke-width: 1.5; }
+  .fig .ln-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.2; }
+  .fig .ln-faint { fill: none; stroke: var(--line-strong); stroke-width: 1; }
+  .fig .ln-lead { fill: none; stroke: var(--accent); stroke-width: 1; }
+  .fig .dash { stroke-dasharray: 4 3; }
+  .fig .dot { stroke-dasharray: 1.5 3; }
+
+  .fig .ah { fill: var(--muted); }
+  .fig .ah-acc { fill: var(--accent); }
+  .fig .ah-warm { fill: var(--warm); }
+  .fig .ah-bad { fill: var(--bad); }
+
+  .fig .pt { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .fig .pt-acc { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+  .fig .pt-warm { fill: var(--warm); stroke: var(--surface); stroke-width: 1.5; }
+  .fig .q { fill: var(--warm); }
+
+  .fig .mark { fill: var(--mark); }
+  .fig .mark-dim { fill: var(--mark-dim); }
+  .fig .seg-sum { fill: var(--warm); }
+  .fig .seg-waste { fill: var(--bad); opacity: .3; }
+  .fig .axis { stroke: var(--line-strong); stroke-width: 1; }
+
+  /* ---------- steps ---------- */
+
+  .steps { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 0 0 20px; }
+
+  .step { background: var(--surface); padding: 18px 20px; display: grid; gap: 7px; min-width: 0; }
+
+  .step-head { display: flex; gap: 12px; align-items: baseline; }
+
+  .step-n {
+    font-family: var(--font-serif);
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--warm);
+    line-height: 1;
+  }
+
+  .step-title { font-weight: 600; font-size: 1rem; }
+
+  .step p { margin: 0; font-size: .91rem; color: var(--fg-soft); max-width: 70ch; }
+
+  .step .gate {
+    font-family: var(--font-mono);
+    font-size: .76rem;
+    color: var(--good);
+  }
+
+  .step .gate::before { content: "验收  "; color: var(--muted); }
+
+  /* ---------- refs ---------- */
+
+  .ref-group { margin-bottom: 22px; }
+
+  .ref-group h4 {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 500;
+  }
+
+  .ref-group ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }
+
+  .ref-group li { margin: 0; font-size: .89rem; line-height: 1.5; }
+
+  .ref-group .src { color: var(--muted); font-size: .82rem; }
+
+  footer.end {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line-strong);
+    padding-top: 22px;
+    margin-top: 40px;
+    font-size: .83rem;
+    color: var(--muted);
+    max-width: 72ch;
+  }
+
+  @media (min-width: 1000px) {
+    .shell {
+      grid-template-columns: 228px minmax(0, 1fr);
+      column-gap: 56px;
+    }
+
+    nav.toc {
+      grid-column: 1;
+      position: sticky;
+      top: calc(env(safe-area-inset-top, 0px) + 28px);
+      align-self: start;
+      max-height: calc(100vh - 80px);
+      overflow-y: auto;
+      padding-block: 44px 20px;
+    }
+
+    main { grid-column: 2; }
+  }
+
+  @media (max-width: 999px) {
+    nav.toc {
+      padding: 20px 0 4px;
+      border-bottom: 1px solid var(--line);
+    }
+    .toc ol { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; scroll-behavior: auto !important; }
+  }
+
+  html { scroll-behavior: smooth; }
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+
+<div class="shell">
+
+  <header class="hero">
+    <p class="eyebrow">Retrieval-Augmented Generation</p>
+    <h1>RAG 知识库工程方案</h1>
+    <p class="lede">
+      从「要不要建」这个闸门开始，到解析、分块、索引、混合检索、重排与评测的完整链路。
+      只收录开源社区已被证据支持的做法，每一处选型都标明代价。
+    </p>
+    <div class="meta-row">
+      <span><strong>范围</strong>　通用方案，不绑定具体仓库</span>
+      <span><strong>立场</strong>　取机制，不取实现</span>
+      <span><strong>核心假设</strong>　索引质量决定系统上限</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="目录">
+    <p class="toc-title">目录</p>
+    <ol>
+      <li><a href="#gate"><span class="n">0</span><span>先判断要不要建</span></a></li>
+      <li><a href="#pipeline"><span class="n">1</span><span>流水线的标准形态</span></a></li>
+      <li><a href="#ingest"><span class="n">2</span><span>摄入侧</span></a></li>
+      <li><a href="#store"><span class="n">3</span><span>存储与索引</span></a></li>
+      <li><a href="#retrieve"><span class="n">4</span><span>检索侧</span></a></li>
+      <li><a href="#graph"><span class="n">5</span><span>图检索</span></a></li>
+      <li><a href="#eval"><span class="n">6</span><span>评测</span></a></li>
+      <li><a href="#agent"><span class="n">7</span><span>Agentic 与接入层</span></a></li>
+      <li><a href="#rollout"><span class="n">8</span><span>落地顺序</span></a></li>
+      <li><a href="#anti"><span class="n">9</span><span>反模式清单</span></a></li>
+      <li><a href="#refs"><span class="n">—</span><span>参考来源</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- 0 -->
+    <section id="gate">
+      <div class="sec-head"><span class="sec-num">0</span><h2>先判断要不要建</h2></div>
+      <p class="sec-sub">这一步被跳过的次数远超想象。知识库是基础设施，不是默认选项。</p>
+
+      <div class="callout">
+        <span class="tag">硬边界</span>
+        <p><strong>语料小于 ~200K token（约 500 页）时不要做 RAG。</strong>直接把全部内容放进提示词，配合提示缓存，效果更好、链路更短，而且不存在「检索失败」这一整类故障。这是 Anthropic 在 Contextual Retrieval 一文里给出的明确建议。</p>
+      </div>
+
+      <h3><span class="h3n">0.1</span>长上下文没有取代检索</h3>
+      <p>两者解决的是不同问题，生产系统里是组合关系：<em>检索把大语料收窄到一个子集，长上下文模型在这个子集上推理</em>。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>维度</th><th>长上下文</th><th>检索</th></tr></thead>
+          <tbody>
+            <tr><td>擅长</td><td>全局综述、跨章节推理、风格一致的改写</td><td>定点查找、精确引用、海量语料里的针</td></tr>
+            <tr><td>规模</td><td>受窗口与单次成本限制</td><td>与语料规模解耦</td></tr>
+            <tr><td>新鲜度</td><td>取决于请求时塞了什么</td><td>索引更新即生效</td></tr>
+            <tr><td>权限</td><td>难以按用户隔离</td><td>可按租户 / 角色在检索内部过滤</td></tr>
+            <tr><td>成本曲线</td><td>注意力随长度二次增长</td><td>检索成本近似常数</td></tr>
+            <tr><td>可引用性</td><td>需额外约束才能溯源</td><td>天然带来源与定位</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>还有一个容易被忽略的事实：<strong>有效召回并不随窗口线性增长</strong>。窗口开大不等于模型真的用上了中间那段内容，相关研究普遍观察到长窗口中段的信息利用率明显下降，同时噪声被一并带入。</p>
+
+      <h3><span class="h3n">0.2</span>三条必要条件</h3>
+      <p>真正让检索不可替代的只有三条。<strong>一条都不占，就先别建。</strong></p>
+      <ul>
+        <li><strong>规模</strong>　语料远超可接受的上下文预算，且还在持续增长。</li>
+        <li><strong>新鲜度</strong>　内容频繁变动，要求分钟级而非重新部署级的生效。</li>
+        <li><strong>权限与可引用性</strong>　不同用户能看到的内容不同，或答案必须附可核查的出处。</li>
+      </ul>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 300" style="--w:760" role="img" aria-label="两道判断：语料不超过 200K token 时全文入提示词；超过后至少满足规模、新鲜度、权限与引用之一才建知识库"><defs><marker id="g-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="30" width="144" height="50" rx="5" class="box"/>
+<text x="88" y="52" class="c b">统计语料总量</text>
+<text x="88" y="68" class="c sm mute">token 数，不是文件数</text>
+<line x1="160" y1="55" x2="193" y2="55" class="ln" marker-end="url(#g-a)"/>
+<polygon points="195,55 275,17 355,55 275,93" class="box"/>
+<text x="275" y="53" class="c b">≤ 200K token</text>
+<text x="275" y="70" class="c sm mute">≈ 500 页</text>
+<line x1="355" y1="55" x2="408" y2="55" class="ln" marker-end="url(#g-a)"/>
+<text x="381" y="47" class="c sm mute">是</text>
+<rect x="410" y="30" width="334" height="50" rx="5" class="sunk"/>
+<text x="577" y="52" class="c b">全文放进提示词 + 提示缓存</text>
+<text x="577" y="68" class="c sm mute">不建库 · 没有「检索失败」这一类故障</text>
+<line x1="275" y1="93" x2="275" y2="120" class="ln" marker-end="url(#g-a)"/>
+<text x="285" y="111" class="sm mute">否</text>
+<rect x="110" y="122" width="330" height="88" rx="5" class="box"/>
+<text x="275" y="142" class="c b">三条必要条件 · 占任一条？</text>
+<rect x="122" y="152" width="96" height="46" rx="5" class="sunk"/>
+<text x="170" y="172" class="c md b">规模</text>
+<text x="170" y="188" class="c xs mute">远超上下文预算</text>
+<rect x="227" y="152" width="96" height="46" rx="5" class="sunk"/>
+<text x="275" y="172" class="c md b">新鲜度</text>
+<text x="275" y="188" class="c xs mute">分钟级生效</text>
+<rect x="332" y="152" width="96" height="46" rx="5" class="sunk"/>
+<text x="380" y="172" class="c md b">权限 · 引用</text>
+<text x="380" y="188" class="c xs mute">按人隔离 · 可溯源</text>
+<line x1="440" y1="166" x2="498" y2="166" class="ln" marker-end="url(#g-a)"/>
+<text x="469" y="158" class="c sm mute">否</text>
+<rect x="500" y="141" width="244" height="50" rx="5" class="sunk"/>
+<text x="622" y="163" class="c b">按需加载文件 · 长上下文</text>
+<text x="622" y="179" class="c sm mute">先别建，量变后再评估</text>
+<line x1="275" y1="210" x2="275" y2="238" class="ln" marker-end="url(#g-a)"/>
+<text x="285" y="229" class="sm mute">是</text>
+<rect x="170" y="240" width="210" height="48" rx="5" class="acc"/>
+<text x="275" y="261" class="c b t-acc">建 RAG 知识库</text>
+<text x="275" y="277" class="c sm mute">按第 1–8 节推进</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 1</span>两道判断。先量总 token 数，200K 以内直接全文入提示词；超过了也要至少占一条必要条件，才值得多维护一条会失败的链路。</figcaption>
+      </figure>
+
+      <div class="callout warn">
+        <span class="tag">常见误判</span>
+        <p>「我们有很多文档」不等于需要 RAG。先量一下总 token 数 —— 大量团队的全部内部文档加起来仍在单次上下文窗口之内，建知识库只是给自己增加了一条会失败的链路。</p>
+      </div>
+    </section>
+
+    <!-- 1 -->
+    <section id="pipeline">
+      <div class="sec-head"><span class="sec-num">1</span><h2>流水线的标准形态</h2></div>
+      <p class="sec-sub">成熟方案收敛到的形状基本一致，分摄入与检索两条链路。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 800 316" style="--w:800" role="img" aria-label="摄入与检索两条链路只在存储层相遇：摄入把同一批产物写入四处存储，检索从两类索引各取 top-k，组装时按 parent_id 回到原文"><defs><marker id="p-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="18" class="cap">摄入 · 离线 · 可重放</text>
+<text x="784" y="18" class="cap e t-warm">成本付一次，摊给所有查询</text>
+<rect x="16" y="28" width="100" height="46" rx="5" class="box"/>
+<text x="66" y="48" class="c b">来源</text>
+<text x="66" y="64" class="c xs mono mute">source</text>
+<rect x="140" y="28" width="100" height="46" rx="5" class="box"/>
+<text x="190" y="48" class="c b">解析</text>
+<text x="190" y="64" class="c xs mono mute">parse</text>
+<line x1="118" y1="51" x2="138" y2="51" class="ln" marker-end="url(#p-a)"/>
+<rect x="264" y="28" width="100" height="46" rx="5" class="box"/>
+<text x="314" y="48" class="c b">分块</text>
+<text x="314" y="64" class="c xs mono mute">chunk</text>
+<line x1="242" y1="51" x2="262" y2="51" class="ln" marker-end="url(#p-a)"/>
+<rect x="388" y="28" width="100" height="46" rx="5" class="warm"/>
+<text x="438" y="48" class="c b t-warm">增强</text>
+<text x="438" y="64" class="c xs mono mute">enrich</text>
+<line x1="366" y1="51" x2="386" y2="51" class="ln" marker-end="url(#p-a)"/>
+<rect x="512" y="28" width="100" height="46" rx="5" class="box"/>
+<text x="562" y="48" class="c b">向量化</text>
+<text x="562" y="64" class="c xs mono mute">embed</text>
+<line x1="490" y1="51" x2="510" y2="51" class="ln" marker-end="url(#p-a)"/>
+<rect x="636" y="28" width="100" height="46" rx="5" class="box"/>
+<text x="686" y="48" class="c b">写入</text>
+<text x="686" y="64" class="c xs mono mute">upsert</text>
+<line x1="614" y1="51" x2="634" y2="51" class="ln" marker-end="url(#p-a)"/>
+<rect x="8" y="122" width="784" height="74" rx="6" class="band"/>
+<text x="22" y="163" class="cap">存储层</text>
+<line x1="686" y1="74" x2="686" y2="108" class="ln"/>
+<line x1="210" y1="108" x2="717" y2="108" class="ln"/>
+<line x1="210" y1="108" x2="210" y2="132" class="ln" marker-end="url(#p-a)"/>
+<line x1="350" y1="108" x2="350" y2="132" class="ln" marker-end="url(#p-a)"/>
+<line x1="547" y1="108" x2="547" y2="132" class="ln" marker-end="url(#p-a)"/>
+<line x1="717" y1="108" x2="717" y2="132" class="ln" marker-end="url(#p-a)"/>
+<text x="450" y="102" class="c xs mute">upsert · 同一批次写入</text>
+<rect x="150" y="134" width="120" height="48" rx="5" class="box"/>
+<text x="210" y="155" class="c b">倒排索引</text>
+<text x="210" y="171" class="c xs mono mute">BM25</text>
+<rect x="290" y="134" width="120" height="48" rx="5" class="box"/>
+<text x="350" y="155" class="c b">向量索引</text>
+<text x="350" y="171" class="c xs mono mute">HNSW</text>
+<rect x="480" y="134" width="134" height="48" rx="5" class="box"/>
+<text x="547" y="155" class="c b">原文 · 父块</text>
+<text x="547" y="171" class="c xs mono mute">chunk + parent</text>
+<rect x="650" y="134" width="134" height="48" rx="5" class="box"/>
+<text x="717" y="155" class="c b">记录表</text>
+<text x="717" y="171" class="c xs mute">增量判定 · 不参与查询</text>
+<line x1="210" y1="182" x2="236" y2="234" class="ln" marker-end="url(#p-a)"/>
+<line x1="350" y1="182" x2="264" y2="234" class="ln" marker-end="url(#p-a)"/>
+<text x="263" y="212" class="c xs mute">各取 top-k</text>
+<line x1="547" y1="182" x2="544" y2="234" class="ln" marker-end="url(#p-a)"/>
+<text x="556" y="212" class="xs mute">parent_id 取整节</text>
+<rect x="15" y="236" width="78" height="46" rx="5" class="box"/>
+<text x="54" y="256" class="c b">查询</text>
+<text x="54" y="272" class="c xs mono mute">query</text>
+<rect x="113" y="236" width="78" height="46" rx="5" class="box"/>
+<text x="152" y="256" class="c b">改写</text>
+<text x="152" y="272" class="c xs mono mute">rewrite</text>
+<line x1="95" y1="259" x2="111" y2="259" class="ln" marker-end="url(#p-a)"/>
+<rect x="211" y="236" width="78" height="46" rx="5" class="acc"/>
+<text x="250" y="256" class="c b t-acc">双路召回</text>
+<text x="250" y="272" class="c xs mono mute">dense+BM25</text>
+<line x1="193" y1="259" x2="209" y2="259" class="ln" marker-end="url(#p-a)"/>
+<rect x="309" y="236" width="78" height="46" rx="5" class="box"/>
+<text x="348" y="256" class="c b">融合</text>
+<text x="348" y="272" class="c xs mono mute">RRF</text>
+<line x1="291" y1="259" x2="307" y2="259" class="ln" marker-end="url(#p-a)"/>
+<rect x="407" y="236" width="78" height="46" rx="5" class="warm"/>
+<text x="446" y="256" class="c b t-warm">重排</text>
+<text x="446" y="272" class="c xs mono mute">rerank</text>
+<line x1="389" y1="259" x2="405" y2="259" class="ln" marker-end="url(#p-a)"/>
+<rect x="505" y="236" width="78" height="46" rx="5" class="box"/>
+<text x="544" y="256" class="c b">组装</text>
+<text x="544" y="272" class="c xs mono mute">assemble</text>
+<line x1="487" y1="259" x2="503" y2="259" class="ln" marker-end="url(#p-a)"/>
+<rect x="603" y="236" width="78" height="46" rx="5" class="box"/>
+<text x="642" y="256" class="c b">生成</text>
+<text x="642" y="272" class="c xs mono mute">generate</text>
+<line x1="585" y1="259" x2="601" y2="259" class="ln" marker-end="url(#p-a)"/>
+<rect x="701" y="236" width="78" height="46" rx="5" class="box"/>
+<text x="740" y="256" class="c b">校验</text>
+<text x="740" y="272" class="c xs mono mute">verify</text>
+<line x1="683" y1="259" x2="699" y2="259" class="ln" marker-end="url(#p-a)"/>
+<text x="16" y="304" class="cap">检索 · 在线 · 每次查询</text>
+<text x="784" y="304" class="cap e t-warm">每一步都乘以 QPS</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 2</span>两条链路只在存储层相遇。摄入把同一批产物写进四处存储；检索从两类索引各取 top-k，组装时再按 <code>parent_id</code> 回到原文。上排的成本付一次，下排每一步都乘以 QPS。</figcaption>
+      </figure>
+
+      <h3><span class="h3n">1.1</span>把计算挪到摄入期</h3>
+      <p>摄入是离线的、可重放的，成本一次性摊给所有查询；查询期的每一步都要<strong>乘以 QPS</strong>。这条分界决定了系统的成本结构。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>应当在摄入期</th><th>只能在查询期</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>上下文增强、结构抽取、元数据归一化、同义词与缩写展开、分块、向量化、摘要生成、实体抽取</td>
+              <td>查询改写与指代消解、混合召回、融合排序、重排、上下文组装、生成</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><span class="h3n">1.2</span>摄入链路必须可重放</h3>
+      <p>分块策略要改、embedding 模型要换、解析器要升级 —— 这些都会发生，而且会反复发生。</p>
+      <p><strong>把原始文档与派生产物分离存储</strong>，派生层随时可以整体重建。做不到这一点，换一次模型就是一次数据迁移事故；做到了，换模型只是重跑一次摄入任务。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 300" style="--w:760" role="img" aria-label="四层存储：raw 只追加，parsed、chunks、index 可逐层重建；换解析器、改分块、换 embedding 模型分别从不同层开始重建"><defs><marker id="l-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="24" width="284" height="50" rx="5" class="warm"/>
+<text x="32" y="46" class="mono b t-warm">raw</text>
+<text x="32" y="63" class="sm mute">原始字节 + 来源元信息</text>
+<rect x="16" y="96" width="284" height="50" rx="5" class="box"/>
+<text x="32" y="118" class="mono b">parsed</text>
+<text x="32" y="135" class="sm mute">归一化 Markdown</text>
+<rect x="16" y="168" width="284" height="50" rx="5" class="box"/>
+<text x="32" y="190" class="mono b">chunks</text>
+<text x="32" y="207" class="sm mute">切分结果 + 元数据</text>
+<rect x="16" y="240" width="284" height="50" rx="5" class="box"/>
+<text x="32" y="262" class="mono b">index</text>
+<text x="32" y="279" class="sm mute">向量 + 倒排</text>
+<text x="288" y="46" class="e sm t-warm">只追加 · 唯一真相源</text>
+<line x1="60" y1="75" x2="60" y2="94" class="ln" marker-end="url(#l-a)"/>
+<text x="72" y="89" class="xs mute">解析器</text>
+<line x1="60" y1="147" x2="60" y2="166" class="ln" marker-end="url(#l-a)"/>
+<text x="72" y="161" class="xs mute">分块器 · 增强</text>
+<line x1="60" y1="219" x2="60" y2="238" class="ln" marker-end="url(#l-a)"/>
+<text x="72" y="233" class="xs mute">embedding · 分词</text>
+<text x="362" y="86" class="c cap">重建范围</text>
+<rect x="330" y="96" width="12" height="194" rx="3" class="acc"/>
+<rect x="356" y="168" width="12" height="122" rx="3" class="acc"/>
+<rect x="382" y="240" width="12" height="50" rx="3" class="acc"/>
+<line x1="414" y1="49" x2="303" y2="49" class="ln" marker-end="url(#l-a)"/>
+<text x="420" y="45" class="b">新增 / 修改文档</text>
+<text x="420" y="63" class="sm mute">追加进 raw，旧版本保留</text>
+<line x1="414" y1="121" x2="345" y2="121" class="ln" marker-end="url(#l-a)"/>
+<text x="420" y="117" class="b">升级解析器 · 改清洗规则</text>
+<text x="420" y="135" class="sm mute">从 raw 重跑，重建 3 层</text>
+<line x1="414" y1="193" x2="371" y2="193" class="ln" marker-end="url(#l-a)"/>
+<text x="420" y="189" class="b">改分块参数 · 换增强 prompt</text>
+<text x="420" y="207" class="sm mute">从 parsed 重跑，重建 2 层</text>
+<line x1="414" y1="265" x2="397" y2="265" class="ln" marker-end="url(#l-a)"/>
+<text x="420" y="261" class="b">换 embedding 模型</text>
+<text x="420" y="279" class="sm mute">从 chunks 重跑，只重建 index</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 3</span>每类变更都有固定的重建起点。竖条是重建范围：越上游的改动波及的层越多；<code>raw</code> 只追加、从不重建，所以任何一次重建都不需要回源重新抓取。</figcaption>
+      </figure>
+    </section>
+
+    <!-- 2 -->
+    <section id="ingest">
+      <div class="sec-head"><span class="sec-num">2</span><h2>摄入侧</h2></div>
+      <p class="sec-sub">检索质量的上限在这里被确定，后面任何调优都只是在逼近它。</p>
+
+      <h3><span class="h3n">2.1</span>解析：先把输入弄干净</h3>
+      <p><strong>所有分块策略在脏输入上都会退化。</strong>导航栏、Cookie 横幅、页眉页脚、断裂的表格标记，这些噪声会同时污染向量与倒排两路索引，后面补不回来。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>工具</th><th>定位</th><th>许可</th><th>取舍</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Docling</strong></td><td>IBM 开源，现属 LF AI &amp; Data</td><td>MIT</td><td>纯 CPU 约 1.5 页/秒，工程化与版面还原最均衡；难扫描件不如专用 VLM</td></tr>
+            <tr><td><strong>MinerU</strong></td><td>OpenDataLab，已切换 VLM 后端</td><td>AGPL 系</td><td>中文、科研与金融文档强；资源消耗高，需要 GPU 才有吞吐</td></tr>
+            <tr><td><strong>Unstructured</strong></td><td>格式覆盖最广，30+ 种</td><td>Apache 2.0</td><td>通用性换来单类文档上的精度妥协，适合来源杂乱的场景</td></tr>
+            <tr><td><strong>Marker</strong></td><td>基于 Surya OCR</td><td>GPL 系（商用需注意）</td><td>学术 PDF 针对性强，公式与参考文献处理好</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>选型原则</h4>
+      <ul>
+        <li><strong>先确定语料的主要形态，再选解析器。</strong>不要找「全能」方案 —— 混合语料用路由：按文件类型分派到不同解析器。</li>
+        <li><strong>统一输出 Markdown。</strong>标题层级是后续结构分块与元数据的唯一可靠来源，解析阶段丢了就再也拿不回来。</li>
+        <li><strong>表格单独处理。</strong>表格转成 Markdown 表格或行级自然语言描述，不要让它被当成普通段落切碎。</li>
+        <li><strong>剥离模板噪声。</strong>导航、页脚、版权、Cookie 提示在入库前去掉；这些内容在每篇文档里重复，会严重干扰 BM25 的词频统计。</li>
+      </ul>
+
+      <h3><span class="h3n">2.2</span>分块：结构优先，不要迷信语义分块</h3>
+
+      <div class="callout warn">
+        <span class="tag">反直觉但证据明确</span>
+        <p><strong>语义分块（semantic chunking）并没有稳定地赢过固定/递归分块。</strong>Vectara 在 NAACL 2025 的研究中，固定大小分块在文档检索、证据检索、答案生成三项上均优于语义分块，额外计算开销不被收益证明。多数独立评测也未能让语义分块在所有数据集上胜出。</p>
+      </div>
+
+      <h4>默认参数</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>参数</th><th>取值</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>策略</td><td><strong>结构感知递归</strong></td><td>优先按标题、段落、列表、代码块边界切，切不动再退回字符级</td></tr>
+            <tr><td>大小</td><td class="num">300 – 800 token</td><td>偏小利于检索精度，偏大利于上下文完整；用 small-to-big 可以两者兼得</td></tr>
+            <tr><td>重叠</td><td class="num">10% – 20%</td><td>防止答案恰好跨越边界；再高只是浪费存储</td></tr>
+            <tr><td>最小长度</td><td class="num">≥ 100 token</td><td>过短的碎片在向量空间里噪声极大，应并入相邻块</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>按内容类型调整</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>内容类型</th><th>切分边界</th><th>要点</th></tr></thead>
+          <tbody>
+            <tr><td>散文 / 手册</td><td>标题层级 + 段落</td><td>标准递归即可，保留完整的标题路径</td></tr>
+            <tr><td>API 文档</td><td>每个端点 / 函数一块</td><td>签名、参数、返回、示例不可分离</td></tr>
+            <tr><td>代码</td><td>函数 / 类边界</td><td>用 AST 切，不要按行数；保留文件路径与 import 上下文</td></tr>
+            <tr><td>表格</td><td>整表或按行分组</td><td>每块重复表头，否则行数据失去含义</td></tr>
+            <tr><td>FAQ / 工单</td><td>一问一答为一块</td><td>天然边界，不需要再切</td></tr>
+            <tr><td>会议纪要 / 对话</td><td>话题切换处</td><td>保留发言人与时间，指代消解依赖它</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>chunk 是检索单元，不是生成单元</h4>
+      <p>这是最值得单独记住的一条。检索命中一个小 chunk 之后，<strong>喂给模型的应该是围绕它扩展出的上下文</strong> —— 相邻块、整节、或整个父文档。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 270" style="--w:760" role="img" aria-label="小块进索引，查询命中 c5 后按 parent_id 取回整节 §2 交给模型"><defs><marker id="s-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="s-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="64" width="344" height="176" rx="5" class="box"/>
+<text x="32" y="86" class="cap">文档 · 部署手册</text>
+<rect x="146" y="14" width="180" height="32" rx="5" class="box"/>
+<text x="236" y="35" class="c">「怎么回滚到上一版？」</text>
+<line x1="236" y1="46" x2="236" y2="137" class="ln-acc" marker-end="url(#s-b)"/>
+<text x="246" y="96" class="xs mute">混合检索命中</text>
+<text x="32" y="119" class="md soft">§1 安装</text>
+<rect x="104" y="100" width="48" height="28" rx="4" class="sunk"/>
+<text x="128" y="118" class="c xs mono mute">c1</text>
+<rect x="158" y="100" width="48" height="28" rx="4" class="sunk"/>
+<text x="182" y="118" class="c xs mono mute">c2</text>
+<text x="32" y="159" class="md b t-warm">§2 回滚</text>
+<rect x="104" y="140" width="48" height="28" rx="4" class="sunk"/>
+<text x="128" y="158" class="c xs mono mute">c3</text>
+<rect x="158" y="140" width="48" height="28" rx="4" class="sunk"/>
+<text x="182" y="158" class="c xs mono mute">c4</text>
+<rect x="212" y="140" width="48" height="28" rx="4" class="acc"/>
+<text x="236" y="158" class="c xs mono b t-acc">c5</text>
+<rect x="266" y="140" width="48" height="28" rx="4" class="sunk"/>
+<text x="290" y="158" class="c xs mono mute">c6</text>
+<text x="32" y="199" class="md soft">§3 监控</text>
+<rect x="104" y="180" width="48" height="28" rx="4" class="sunk"/>
+<text x="128" y="198" class="c xs mono mute">c7</text>
+<rect x="158" y="180" width="48" height="28" rx="4" class="sunk"/>
+<text x="182" y="198" class="c xs mono mute">c8</text>
+<rect x="212" y="180" width="48" height="28" rx="4" class="sunk"/>
+<text x="236" y="198" class="c xs mono mute">c9</text>
+<rect x="98" y="134" width="222" height="40" rx="7" class="ring-warm"/>
+<line x1="322" y1="154" x2="428" y2="154" class="ln-warm" marker-end="url(#s-w)"/>
+<text x="375" y="146" class="c xs mono t-warm">parent_id</text>
+<text x="375" y="170" class="c xs mute">取回整节</text>
+<rect x="430" y="64" width="314" height="176" rx="5" class="box"/>
+<text x="446" y="86" class="cap">交给模型的上下文</text>
+<rect x="446" y="100" width="282" height="108" rx="5" class="warm"/>
+<text x="458" y="119" class="md b t-warm">§2 回滚 · 完整一节</text>
+<rect x="458" y="130" width="258" height="15" rx="3" class="box"/>
+<text x="466" y="141" class="xs mono mute">c3</text>
+<rect x="458" y="149" width="258" height="15" rx="3" class="box"/>
+<text x="466" y="160" class="xs mono mute">c4</text>
+<rect x="458" y="168" width="258" height="15" rx="3" class="acc"/>
+<text x="466" y="179" class="xs mono b t-acc">c5</text>
+<rect x="458" y="187" width="258" height="15" rx="3" class="box"/>
+<text x="466" y="198" class="xs mono mute">c6</text>
+<text x="188" y="258" class="c cap">检索粒度 · 小块</text>
+<text x="587" y="258" class="c cap">生成粒度 · 整节</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 4</span>小块负责被找到，整节负责被读懂。查询命中 c5 后，按 <code>parent_id</code> 把整节 §2 取回交给模型；c5 仍在上下文里，只是不再孤立。</figcaption>
+      </figure>
+
+      <h3><span class="h3n">2.3</span>上下文增强：当前性价比最高的一招</h3>
+      <p>独立 chunk 丢失上下文是检索失败的主因。「营收增长了 3%」这样的片段，脱离文档就无法判断说的是谁、哪一年、哪个口径。</p>
+
+      <p><strong>Contextual Retrieval</strong> 的做法是在索引前，用 LLM 为每个 chunk 生成 50–100 token 的定位说明，拼在 chunk 前面，<em>同时用于 embedding 和 BM25 索引</em>。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 240" style="--w:760" role="img" aria-label="定位说明与原文拼接后同时进入向量索引和倒排索引；检索命中后返回给模型的只有原文"><defs><marker id="x-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="x-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="20" width="180" height="52" rx="5" class="sunk"/>
+<text x="106" y="43" class="c b">整篇文档</text>
+<text x="106" y="59" class="c sm mute">进提示缓存，只付一次</text>
+<rect x="16" y="92" width="180" height="56" rx="5" class="box"/>
+<text x="106" y="117" class="c b">chunk 原文</text>
+<text x="106" y="133" class="c sm soft">「营收较上季度增长 3%」</text>
+<rect x="236" y="46" width="100" height="56" rx="5" class="box"/>
+<text x="286" y="71" class="c b">LLM</text>
+<text x="286" y="87" class="c sm mute">写定位说明</text>
+<line x1="198" y1="48" x2="234" y2="64" class="ln" marker-end="url(#x-a)"/>
+<line x1="198" y1="110" x2="234" y2="86" class="ln" marker-end="url(#x-a)"/>
+<text x="376" y="26" class="xs mono mute">indexed_text</text>
+<rect x="376" y="34" width="220" height="50" rx="5" class="warm"/>
+<text x="388" y="54" class="md b t-warm">定位说明 · 50–100 token</text>
+<text x="388" y="72" class="sm soft">出自 ACME 2023 年报二季度摘要</text>
+<rect x="376" y="88" width="220" height="52" rx="5" class="box"/>
+<text x="388" y="109" class="md b">chunk 原文</text>
+<text x="388" y="127" class="sm soft">营收较上季度增长 3%</text>
+<line x1="336" y1="70" x2="374" y2="62" class="ln-warm" marker-end="url(#x-w)"/>
+<line x1="198" y1="128" x2="374" y2="128" class="ln" marker-end="url(#x-a)"/>
+<text x="286" y="121" class="c xs mute">原文拼在后面</text>
+<rect x="636" y="28" width="108" height="44" rx="5" class="acc"/>
+<text x="690" y="47" class="c b t-acc">向量索引</text>
+<text x="690" y="63" class="c xs mono mute">embed</text>
+<rect x="636" y="96" width="108" height="44" rx="5" class="acc"/>
+<text x="690" y="115" class="c b t-acc">倒排索引</text>
+<text x="690" y="131" class="c xs mute">BM25 分词</text>
+<line x1="598" y1="87" x2="634" y2="52" class="ln" marker-end="url(#x-a)"/>
+<line x1="598" y1="87" x2="634" y2="118" class="ln" marker-end="url(#x-a)"/>
+<polyline points="106,150 106,206 634,206" class="ln dash" marker-end="url(#x-a)"/>
+<text x="370" y="198" class="c sm mute">命中后返回原文，定位说明不进上下文</text>
+<rect x="636" y="184" width="108" height="44" rx="5" class="sunk"/>
+<text x="690" y="203" class="c b">模型上下文</text>
+<text x="690" y="219" class="c xs mono mute">returned_text</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 5</span>定位说明只进索引，不进上下文。LLM 读着缓存里的整篇文档，为每个 chunk 写一句定位，拼在原文前面；向量与 BM25 索引的是这份拼接文本，检索命中后交给模型的仍是原文。</figcaption>
+      </figure>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 180" style="--w:760" role="img" aria-label="top-20 检索失败率：普通 embedding 5.7%，上下文化 embedding 3.7%，再加上下文化 BM25 2.9%，再加重排 1.9%"><defs></defs>
+<text x="190" y="16" class="cap">top-20 检索失败率 · 越短越好</text>
+<text x="176" y="48.5" class="e">基线 · 普通 embedding</text>
+<path d="M190,34H613.5Q617.5,34 617.5,38V50Q617.5,54 613.5,54H190Z" class="mark-dim"><title>基线 · 普通 embedding · 5.7%</title></path>
+<text x="625.5" y="48.5" class="b">5.7%</text>
+<text x="176" y="84.5" class="e">+ 上下文化 embedding</text>
+<path d="M190,70H463.5Q467.5,70 467.5,74V86Q467.5,90 463.5,90H190Z" class="mark-dim"><title>+ 上下文化 embedding · 3.7%</title></path>
+<text x="475.5" y="84.5" class="b">3.7%</text>
+<text x="511.5" y="84.5" class="sm mute">（−35%）</text>
+<text x="176" y="120.5" class="e">+ 上下文化 BM25</text>
+<path d="M190,106H403.5Q407.5,106 407.5,110V122Q407.5,126 403.5,126H190Z" class="mark-dim"><title>+ 上下文化 BM25 · 2.9%</title></path>
+<text x="415.5" y="120.5" class="b">2.9%</text>
+<text x="451.5" y="120.5" class="sm mute">（−49%）</text>
+<text x="176" y="156.5" class="e b">+ 重排</text>
+<path d="M190,142H328.5Q332.5,142 332.5,146V158Q332.5,162 328.5,162H190Z" class="mark"><title>+ 重排 · 1.9%</title></path>
+<text x="340.5" y="156.5" class="b">1.9%</text>
+<text x="376.5" y="156.5" class="sm mute">（−67%）</text>
+<line x1="190" y1="26" x2="190" y2="170" class="axis"/>
+</svg></div>
+        <figcaption><span class="fig-n">图 6</span>三项叠加，失败率从 5.7% 降到 1.9%。括号内是相对基线的降幅。数据为 Anthropic 公布的 top-20 检索失败率；增强的一次性成本约 $1.02 / 百万文档 token，前提是使用提示缓存。</figcaption>
+      </figure>
+
+      <h4>实现要点</h4>
+      <pre><code><span class="cm"># 关键在于把整篇文档放进缓存，而不是为每个 chunk 重发</span>
+<span class="kw">system</span>: [整篇文档]          <span class="cm">← 缓存命中，只付一次</span>
+<span class="kw">user</span>:   这是文档中的一个片段：
+        [chunk]
+        请用 50-100 token 说明这个片段在文档中的位置与讨论对象，
+        只输出这段说明本身。
+
+<span class="cm"># 产物拼接顺序</span>
+indexed_text = context + <span class="st">"\n\n"</span> + chunk   <span class="cm">← 向量与 BM25 都用这一份</span>
+returned_text = chunk                        <span class="cm">← 返回给模型的仍是原文</span></code></pre>
+
+      <div class="callout warn">
+        <span class="tag">成本前提</span>
+        <p>没有提示缓存，这个方案的成本会高一个数量级 —— 每个 chunk 都要重发整篇文档。<strong>先确认所用模型支持提示缓存再评估这条路线。</strong></p>
+      </div>
+
+      <h4>替代路线：late chunking</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Contextual Retrieval</th><th>Late Chunking</th></tr></thead>
+          <tbody>
+            <tr><td>机制</td><td>LLM 生成文字说明后拼接</td><td>整文档 token 级 embedding，再按边界池化</td></tr>
+            <tr><td>摄入成本</td><td>每百万 token 约 $1（需缓存）</td><td>仅一次长上下文 embedding</td></tr>
+            <tr><td>收益覆盖</td><td>向量路 + 词法路</td><td><strong>仅向量路</strong></td></tr>
+            <tr><td>前提</td><td>模型支持提示缓存</td><td>embedding 模型支持长上下文</td></tr>
+            <tr><td>适用</td><td>代词与跨章节指代多</td><td>成本敏感、文档较短</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>两条路线目前没有在同一流水线里的严格对比，<strong>按上面的「适用」一栏选，不要同时上。</strong></p>
+
+      <h3><span class="h3n">2.4</span>元数据：决定了能不能上生产</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>字段</th><th>必要性</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td><code>source</code></td><td>必备</td><td>可引用、可溯源，用户点得进去</td></tr>
+            <tr><td><code>section_path</code></td><td>必备</td><td>结构定位与上下文扩展的依据</td></tr>
+            <tr><td><code>content_hash</code></td><td>必备</td><td>增量更新的唯一依据</td></tr>
+            <tr><td><code>updated_at</code></td><td>必备</td><td>新鲜度过滤与排序</td></tr>
+            <tr><td><code>tenant</code> / <code>acl</code></td><td>多租户必备</td><td>检索内部的权限过滤</td></tr>
+            <tr><td><code>parent_id</code></td><td>用 small-to-big 时必备</td><td>命中后取回完整上下文</td></tr>
+            <tr><td><code>doc_type</code> / <code>lang</code></td><td>推荐</td><td>按类型分流检索策略</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <span class="tag">权限必须前置</span>
+        <p><strong>过滤必须发生在检索内部，不能是检索后在应用层筛。</strong>后筛会让 top-k 被无权访问的内容占满，表现为「有权限的用户搜不到东西」—— 这个 bug 在测试环境几乎不可见，因为测试账号通常有全量权限。</p>
+      </div>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 214" style="--w:760" role="img" aria-label="后置过滤在全部租户里取前 5 条再丢掉无权内容，只剩 2 条；前置过滤只在可见范围里取前 5 条，名额全部有效"><defs><marker id="k-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="422" y="32" class="c cap">top-5 名额</text>
+<text x="16" y="60" class="b t-bad">检索后过滤</text>
+<text x="16" y="78" class="sm mute">应用层再筛</text>
+<rect x="130" y="41" width="140" height="50" rx="5" class="box"/>
+<text x="200" y="63" class="c b">检索 top-5</text>
+<text x="200" y="79" class="c sm mute">范围：全部租户</text>
+<line x1="270" y1="66" x2="292" y2="66" class="ln" marker-end="url(#k-a)"/>
+<rect x="296" y="44" width="44" height="44" rx="4" class="bad"/>
+<text x="318" y="65" class="c b t-bad">B</text>
+<text x="318" y="81" class="c xs mono mute">d1</text>
+<line x1="302" y1="82" x2="334" y2="50" class="ln-bad"/>
+<rect x="348" y="44" width="44" height="44" rx="4" class="acc"/>
+<text x="370" y="65" class="c b t-acc">A</text>
+<text x="370" y="81" class="c xs mono mute">d2</text>
+<rect x="400" y="44" width="44" height="44" rx="4" class="bad"/>
+<text x="422" y="65" class="c b t-bad">B</text>
+<text x="422" y="81" class="c xs mono mute">d3</text>
+<line x1="406" y1="82" x2="438" y2="50" class="ln-bad"/>
+<rect x="452" y="44" width="44" height="44" rx="4" class="bad"/>
+<text x="474" y="65" class="c b t-bad">B</text>
+<text x="474" y="81" class="c xs mono mute">d4</text>
+<line x1="458" y1="82" x2="490" y2="50" class="ln-bad"/>
+<rect x="504" y="44" width="44" height="44" rx="4" class="acc"/>
+<text x="526" y="65" class="c b t-acc">A</text>
+<text x="526" y="81" class="c xs mono mute">d5</text>
+<line x1="550" y1="66" x2="614" y2="66" class="ln" marker-end="url(#k-a)"/>
+<text x="582" y="58" class="c xs mute">应用层过滤</text>
+<rect x="616" y="41" width="128" height="50" rx="5" class="bad"/>
+<text x="680" y="63" class="c b t-bad">只剩 2 条</text>
+<text x="680" y="79" class="c sm mute">3 个名额被浪费</text>
+<line x1="16" y1="118" x2="744" y2="118" class="ln-faint"/>
+<text x="16" y="164" class="b t-good">检索内过滤</text>
+<text x="16" y="182" class="sm mute">filter 下推到索引</text>
+<rect x="130" y="145" width="140" height="50" rx="5" class="acc"/>
+<text x="200" y="167" class="c b t-acc">检索 top-5</text>
+<text x="200" y="183" class="c sm mute">范围：tenant = A</text>
+<line x1="270" y1="170" x2="292" y2="170" class="ln" marker-end="url(#k-a)"/>
+<rect x="296" y="148" width="44" height="44" rx="4" class="acc"/>
+<text x="318" y="169" class="c b t-acc">A</text>
+<text x="318" y="185" class="c xs mono mute">d2</text>
+<rect x="348" y="148" width="44" height="44" rx="4" class="acc"/>
+<text x="370" y="169" class="c b t-acc">A</text>
+<text x="370" y="185" class="c xs mono mute">d5</text>
+<rect x="400" y="148" width="44" height="44" rx="4" class="acc"/>
+<text x="422" y="169" class="c b t-acc">A</text>
+<text x="422" y="185" class="c xs mono mute">d7</text>
+<rect x="452" y="148" width="44" height="44" rx="4" class="acc"/>
+<text x="474" y="169" class="c b t-acc">A</text>
+<text x="474" y="185" class="c xs mono mute">d9</text>
+<rect x="504" y="148" width="44" height="44" rx="4" class="acc"/>
+<text x="526" y="169" class="c b t-acc">A</text>
+<text x="526" y="185" class="c xs mono mute">d12</text>
+<line x1="550" y1="170" x2="614" y2="170" class="ln" marker-end="url(#k-a)"/>
+<rect x="616" y="145" width="128" height="50" rx="5" class="good"/>
+<text x="680" y="167" class="c b t-good">拿到 5 条</text>
+<text x="680" y="183" class="c sm mute">名额全部有效</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 7</span>过滤放在哪里，决定 top-k 名额给谁。用户属于租户 A：后置过滤先在全部租户里取前 5 条，再丢掉 3 条无权内容；前置过滤只在可见范围里取前 5 条。测试账号通常有全量权限，上面那一行在测试环境里永远看起来正常。</figcaption>
+      </figure>
+
+      <h3><span class="h3n">2.5</span>embedding 选型</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>模型</th><th>许可</th><th>特点</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Qwen3-Embedding</strong></td><td>Apache 2.0</td><td>开源权重第一梯队，32K 上下文，Matryoshka 维度可裁剪（32–7168）</td></tr>
+            <tr><td><strong>BGE-M3</strong></td><td>MIT</td><td>100+ 语言，单模型同时产出 dense / sparse / multi-vector，自托管多语言常规选择</td></tr>
+            <tr><td><strong>NV-Embed-v2</strong></td><td>NVIDIA 专有许可</td><td>英文榜单强，但商用受限，先读许可</td></tr>
+            <tr><td><strong>Jina v3 / v4</strong></td><td><span style="color:var(--bad)">CC-BY-NC-4.0</span></td><td>部分权重禁止商用，需走托管 API 或单独授权</td></tr>
+            <tr><td>商业 API</td><td>—</td><td>省去部署与扩容，代价是数据出境与长期单价</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <span class="tag">上线前才发现的坑</span>
+        <p>许可是 embedding 与 reranker 选型里最容易踩的雷。多个高分开源模型是 <code>CC-BY-NC</code> 或自定义研究许可，<strong>选型第一步先读 LICENSE，不是先看榜单。</strong></p>
+      </div>
+
+      <h4>embed 什么</h4>
+      <p>一个常见错误是<strong>对原始源码或原始片段直接做 embedding</strong>。应当 embed 的是「意图 + 上下文」—— 实现细节会淹没意图，两段意图完全不同但写法相似的内容会被判为高相似度。</p>
+      <ul>
+        <li>代码：embed 函数签名 + 文档注释 + 用途描述，而不是函数体</li>
+        <li>表格：embed 表头 + 行的自然语言化，而不是原始分隔符</li>
+        <li>长文：embed 上下文说明 + 正文，而不是裸正文</li>
+      </ul>
+
+      <h4>维度与成本</h4>
+      <p>Matryoshka 类模型允许在<strong>不重新训练</strong>的前提下裁剪维度。常见做法是用高维做重排前的精排、低维做大规模初筛，或者直接按召回评测结果选一个够用的维度。存储估算：</p>
+      <pre><code><span class="cm"># float32</span>
+存储 ≈ 向量数 × 维度 × 4 bytes × (1 + HNSW 图开销 ≈ 0.5~1.0)
+
+<span class="cm"># 1000 万 chunk × 1024 维 ≈ 41 GB 裸向量，约 60~80 GB 实际占用</span>
+<span class="cm"># 同样规模降到 256 维 ≈ 10 GB，int8 量化后再降约 4 倍</span></code></pre>
+    </section>
+
+    <!-- 3 -->
+    <section id="store">
+      <div class="sec-head"><span class="sec-num">3</span><h2>存储与索引</h2></div>
+      <p class="sec-sub">选型原则只有一条：引入最少的新基础设施。</p>
+
+      <h3><span class="h3n">3.1</span>向量库选型</h3>
+
+      <div class="callout">
+        <span class="tag">基准事实</span>
+        <p>一项同机、同数据集（118 万向量）、同 HNSW 参数的对比显示：<strong>在相同召回率下，不同向量库之间约有 2 倍查询延迟、4 倍磁盘、4 倍以上峰值内存的差距。</strong>这类运维差异比功能清单更值得关注。</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方案</th><th>形态</th><th>适用规模</th><th>取舍</th></tr></thead>
+          <tbody>
+            <tr><td><strong>pgvector</strong></td><td>Postgres 扩展</td><td>千万级以内</td><td>事务、备份、权限全部复用，<strong>新增基础设施为零</strong>；超大规模吃力</td></tr>
+            <tr><td><strong>Qdrant</strong></td><td>独立服务</td><td>千万 ~ 亿级</td><td>自托管性价比最优，元数据过滤与原生混合检索强</td></tr>
+            <tr><td><strong>Milvus</strong></td><td>分布式集群</td><td>十亿级</td><td>GPU 加速与水平扩展；运维复杂度最高，小规模下资源占用明显偏大</td></tr>
+            <tr><td><strong>Weaviate</strong></td><td>独立服务</td><td>千万 ~ 亿级</td><td>原生 BM25 + 向量混合，模块化生态完整</td></tr>
+            <tr><td><strong>LanceDB</strong></td><td>进程内嵌入式</td><td>百万 ~ 千万</td><td>无服务端，向量 + 全文 + SQL 过滤 + 版本化，可直接写对象存储</td></tr>
+            <tr><td><strong>sqlite-vec</strong></td><td>SQLite 扩展</td><td>百万级以内</td><td>纯 C 无依赖，SQLite 能跑的地方都能跑；<span style="color:var(--bad)">仍是 pre-v1，有破坏性变更</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><strong>绝大多数团队高估了自己的规模。</strong>千万级以内优先 pgvector —— 省下来的运维精力投到检索质量上，收益远高于换一个更快的向量库。</p>
+
+      <h3><span class="h3n">3.2</span>词法索引必须同时建</h3>
+      <p>只有向量索引的知识库一定会在精确标识符上失败。</p>
+      <div class="callout warn">
+        <span class="tag">典型失败</span>
+        <p>查询错误码 <code>TS-999</code>：embedding 会找到「关于错误码的内容」，但找不到<strong>这一个</strong>。函数名、型号、人名、版本号、配置项同理。BM25 做的是字面匹配，与向量是互补关系，不是备选关系。</p>
+      </div>
+      <p>实现上不需要额外组件：Postgres 有全文检索，SQLite 有 FTS5，Qdrant / Weaviate / LanceDB 内置 BM25。<strong>没有理由只建一路。</strong></p>
+
+      <h3><span class="h3n">3.3</span>索引参数</h3>
+      <p>HNSW 的三个参数决定了召回与成本的平衡点，默认值往往偏保守：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>参数</th><th>作用</th><th>调整方向</th></tr></thead>
+          <tbody>
+            <tr><td><code>m</code></td><td>每个节点的邻居数</td><td>建索引时固定；16–32 常见，高维或高召回要求取大</td></tr>
+            <tr><td><code>ef_construction</code></td><td>建索引时的搜索宽度</td><td>越大索引质量越高、构建越慢；64–256</td></tr>
+            <tr><td><code>ef_search</code></td><td>查询时的搜索宽度</td><td><strong>可在线调</strong>，是召回率的主要旋钮</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 304" style="--w:760" role="img" aria-label="HNSW 查询从顶层入口逐层贪心下降，在第 0 层维护宽度为 ef_search 的候选列表；m 是每个点的连边数"><defs><marker id="h-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="16" width="544" height="64" rx="6" class="band"/>
+<text x="28" y="32" class="cap">第 2 层</text>
+<rect x="16" y="98" width="544" height="72" rx="6" class="band"/>
+<text x="28" y="114" class="cap">第 1 层</text>
+<rect x="16" y="188" width="544" height="104" rx="6" class="band"/>
+<text x="28" y="204" class="cap">第 0 层 · 全部向量</text>
+<ellipse cx="468" cy="250" rx="74" ry="34" class="ring-acc"/>
+<line x1="90" y1="142" x2="90" y2="228" class="ln-faint dot"/>
+<line x1="162" y1="128" x2="162" y2="236" class="ln-faint dot"/>
+<line x1="234" y1="150" x2="234" y2="226" class="ln-faint dot"/>
+<line x1="342" y1="130" x2="342" y2="272" class="ln-faint dot"/>
+<line x1="378" y1="152" x2="378" y2="240" class="ln-faint dot"/>
+<line x1="450" y1="136" x2="450" y2="230" class="ln-faint dot"/>
+<line x1="162" y1="52" x2="162" y2="128" class="ln-faint dot"/>
+<line x1="378" y1="46" x2="378" y2="152" class="ln-faint dot"/>
+<line x1="54" y1="252" x2="90" y2="228" class="ln-edge"/>
+<line x1="54" y1="252" x2="126" y2="270" class="ln-edge"/>
+<line x1="90" y1="228" x2="162" y2="236" class="ln-edge"/>
+<line x1="126" y1="270" x2="162" y2="236" class="ln-edge"/>
+<line x1="126" y1="270" x2="198" y2="268" class="ln-edge"/>
+<line x1="162" y1="236" x2="234" y2="226" class="ln-edge"/>
+<line x1="198" y1="268" x2="234" y2="226" class="ln-edge"/>
+<line x1="198" y1="268" x2="270" y2="256" class="ln-warm"/>
+<line x1="234" y1="226" x2="270" y2="256" class="ln-warm"/>
+<line x1="270" y1="256" x2="306" y2="232" class="ln-warm"/>
+<line x1="270" y1="256" x2="342" y2="272" class="ln-warm"/>
+<line x1="306" y1="232" x2="378" y2="240" class="ln-edge"/>
+<line x1="342" y1="272" x2="378" y2="240" class="ln-edge"/>
+<line x1="342" y1="272" x2="414" y2="270" class="ln-edge"/>
+<line x1="378" y1="240" x2="450" y2="230" class="ln-edge"/>
+<line x1="414" y1="270" x2="450" y2="230" class="ln-edge"/>
+<line x1="414" y1="270" x2="486" y2="262" class="ln-edge"/>
+<line x1="450" y1="230" x2="486" y2="262" class="ln-edge"/>
+<line x1="450" y1="230" x2="522" y2="238" class="ln-edge"/>
+<line x1="486" y1="262" x2="522" y2="238" class="ln-edge"/>
+<line x1="90" y1="142" x2="162" y2="128" class="ln-edge"/>
+<line x1="162" y1="128" x2="234" y2="150" class="ln-edge"/>
+<line x1="234" y1="150" x2="342" y2="130" class="ln-edge"/>
+<line x1="342" y1="130" x2="378" y2="152" class="ln-edge"/>
+<line x1="378" y1="152" x2="450" y2="136" class="ln-edge"/>
+<line x1="234" y1="150" x2="378" y2="152" class="ln-edge"/>
+<line x1="162" y1="52" x2="378" y2="46" class="ln-edge"/>
+<line x1="168" y1="51.83" x2="370" y2="46.22" class="ln-acc" marker-end="url(#h-b)"/>
+<line x1="378" y1="52" x2="378" y2="144" class="ln-acc dash" marker-end="url(#h-b)"/>
+<line x1="383.86" y1="150.7" x2="442.19" y2="137.74" class="ln-acc" marker-end="url(#h-b)"/>
+<line x1="450" y1="142" x2="450" y2="222" class="ln-acc dash" marker-end="url(#h-b)"/>
+<circle cx="54" cy="252" r="4.5" class="pt"/>
+<circle cx="90" cy="228" r="4.5" class="pt"/>
+<circle cx="126" cy="270" r="4.5" class="pt"/>
+<circle cx="162" cy="236" r="4.5" class="pt"/>
+<circle cx="198" cy="268" r="4.5" class="pt"/>
+<circle cx="234" cy="226" r="4.5" class="pt"/>
+<circle cx="270" cy="256" r="4.5" class="pt-warm"/>
+<circle cx="306" cy="232" r="4.5" class="pt"/>
+<circle cx="342" cy="272" r="4.5" class="pt"/>
+<circle cx="378" cy="240" r="4.5" class="pt"/>
+<circle cx="414" cy="270" r="4.5" class="pt"/>
+<circle cx="450" cy="230" r="4.5" class="pt-acc"/>
+<circle cx="486" cy="262" r="4.5" class="pt"/>
+<circle cx="522" cy="238" r="4.5" class="pt"/>
+<circle cx="90" cy="142" r="4.5" class="pt"/>
+<circle cx="162" cy="128" r="4.5" class="pt"/>
+<circle cx="234" cy="150" r="4.5" class="pt"/>
+<circle cx="342" cy="130" r="4.5" class="pt"/>
+<circle cx="378" cy="152" r="4.5" class="pt-acc"/>
+<circle cx="450" cy="136" r="4.5" class="pt-acc"/>
+<circle cx="162" cy="52" r="4.5" class="pt-acc"/>
+<circle cx="378" cy="46" r="4.5" class="pt-acc"/>
+<polygon points="486,239 492,245 486,251 480,245" class="q"/>
+<text x="162" y="40" class="c xs b t-acc">入口</text>
+<text x="270" y="286" class="c xs mono b t-warm">m = 4</text>
+<text x="580" y="40" class="md b">第 2 层：点最少</text>
+<text x="580" y="57" class="sm mute">查询从这里的入口开始</text>
+<text x="580" y="126" class="md b">每层贪心走向离 q 更近的点</text>
+<text x="580" y="143" class="sm mute">走不动了就下降一层</text>
+<polygon points="586,188 591,193 586,198 581,193" class="q"/>
+<text x="598" y="197" class="sm">查询向量 q</text>
+<line x1="576" y1="226" x2="541" y2="244" class="ln-lead"/>
+<text x="580" y="222" class="md b mono t-acc">ef_search</text>
+<text x="580" y="239" class="sm mute">底层候选列表的宽度</text>
+<text x="580" y="255" class="sm mute">在线可调，召回主旋钮</text>
+<text x="580" y="276" class="sm b t-warm">m：每点保留的邻居数</text>
+<text x="580" y="292" class="sm mute">建索引时固定</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 8</span>HNSW 的查询路径。从顶层入口出发，每层贪心走向离 q 更近的点，走不动就下降一层；到第 0 层后维护宽度为 <code>ef_search</code> 的候选列表（虚线圈）。<code>m</code> 是每个点的连边数（铜色）；<code>ef_construction</code> 是建图时的同一个宽度，只影响离线构建。</figcaption>
+      </figure>
+
+      <p>一项小实例测试中，pgvector 的召回率仅靠调高 <code>ef_search</code> 就从约 95% 升到 98%。<strong>在换向量库之前，先确认当前这个的参数已经调过。</strong></p>
+
+      <h3><span class="h3n">3.4</span>增量更新</h3>
+      <p>开源方案收敛到同一个结构：<strong>一张独立的记录表</strong>，与向量库并行维护。</p>
+
+      <pre><code><span class="kw">CREATE TABLE</span> index_record (
+  doc_id        <span class="kw">TEXT</span> <span class="kw">PRIMARY KEY</span>,   <span class="cm">-- 块级标识</span>
+  source_id     <span class="kw">TEXT</span> <span class="kw">NOT NULL</span>,      <span class="cm">-- 所属文档，按来源批量清理用</span>
+  content_hash  <span class="kw">TEXT</span> <span class="kw">NOT NULL</span>,      <span class="cm">-- 变更判定的唯一依据</span>
+  updated_at    <span class="kw">TIMESTAMPTZ</span> <span class="kw">NOT NULL</span>
+);</code></pre>
+
+      <p>每次摄入重新计算 hash：未变更的跳过，变更的重写，消失的删除。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 272" style="--w:760" role="img" aria-label="每个 chunk 按指纹判定新增、跳过或重写，批次结束后删除本批未出现的记录；指纹漏算 model_id 会让换模型后全部被跳过"><defs><marker id="i-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="i-r" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-bad" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="108" width="90" height="48" rx="5" class="box"/>
+<text x="61" y="129" class="c b">本批 chunk</text>
+<text x="61" y="145" class="c xs mute">逐个判定</text>
+<line x1="106" y1="132" x2="124" y2="132" class="ln" marker-end="url(#i-a)"/>
+<rect x="126" y="78" width="180" height="108" rx="5" class="box"/>
+<rect x="150" y="143" width="150" height="18" rx="3" class="hl-warm"/>
+<text x="138" y="98" class="b">计算指纹</text>
+<text x="138" y="120" class="sm mono">hash( content</text>
+<text x="158" y="138" class="sm mono">+ metadata</text>
+<text x="158" y="156" class="sm mono b t-warm">+ model_id</text>
+<text x="158" y="174" class="sm mono">+ chunk_params )</text>
+<line x1="306" y1="132" x2="324" y2="132" class="ln" marker-end="url(#i-a)"/>
+<polygon points="326,132 380,96 434,132 380,168" class="box"/>
+<text x="380" y="128" class="c md mono">doc_id</text>
+<text x="380" y="145" class="c md">已存在？</text>
+<line x1="380" y1="168" x2="380" y2="206" class="ln" marker-end="url(#i-a)"/>
+<text x="388" y="192" class="sm mute">否</text>
+<rect x="324" y="208" width="112" height="44" rx="5" class="acc"/>
+<text x="380" y="227" class="c b t-acc">新增</text>
+<text x="380" y="243" class="c xs mute">写向量 + 写记录</text>
+<line x1="434" y1="132" x2="460" y2="132" class="ln" marker-end="url(#i-a)"/>
+<text x="447" y="124" class="c sm mute">是</text>
+<polygon points="462,132 516,98 570,132 516,166" class="box"/>
+<text x="516" y="128" class="c md mono">hash</text>
+<text x="516" y="145" class="c md">相同？</text>
+<line x1="516" y1="166" x2="516" y2="206" class="ln" marker-end="url(#i-a)"/>
+<text x="524" y="192" class="sm mute">否</text>
+<rect x="460" y="208" width="112" height="44" rx="5" class="warm"/>
+<text x="516" y="227" class="c b t-warm">重写</text>
+<text x="516" y="243" class="c xs mute">覆盖向量与记录</text>
+<line x1="570" y1="132" x2="594" y2="132" class="ln" marker-end="url(#i-a)"/>
+<text x="582" y="124" class="c sm mute">是</text>
+<rect x="596" y="110" width="148" height="44" rx="5" class="sunk"/>
+<text x="670" y="129" class="c b">跳过</text>
+<text x="670" y="145" class="c xs mute">不写任何东西</text>
+<rect x="596" y="176" width="148" height="86" rx="5" class="bad"/>
+<text x="608" y="196" class="md b t-bad">陷阱：漏算 model_id</text>
+<text x="608" y="214" class="sm soft">换模型后 hash 不变</text>
+<text x="608" y="231" class="sm soft">全部落到「跳过」</text>
+<text x="608" y="248" class="sm soft">新旧向量混在同一索引</text>
+<line x1="670" y1="176" x2="670" y2="157" class="ln-bad dash" marker-end="url(#i-r)"/>
+<polyline points="61,106 61,41 322,41" class="ln dash" marker-end="url(#i-a)"/>
+<text x="190" y="35" class="c xs mute">批次结束后</text>
+<rect x="324" y="20" width="420" height="42" rx="5" class="bad"/>
+<text x="338" y="46" class="b t-bad">删除</text>
+<text x="376" y="46" class="md">记录表里有、本批未出现的 doc_id</text>
+<text x="730" y="46" class="e xs mute">范围见图 10</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 9</span>每个 chunk 按指纹三分：新增、跳过、重写；批次结束后再按范围删掉没再出现的。<code>model_id</code> 和分块参数必须算进指纹 —— 漏掉它们，换模型时所有 chunk 都会走进「跳过」，旧向量原封不动地留在索引里。</figcaption>
+      </figure>
+
+      <h4>三种清理语义</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>模式</th><th>行为</th><th>风险</th></tr></thead>
+          <tbody>
+            <tr><td><code>incremental</code></td><td>边摄入边清理</td><td>适合按来源分批，中途失败影响面小；整源下线发现不了</td></tr>
+            <tr><td><code>full</code></td><td>全部摄入完再清理</td><td><span style="color:var(--bad)">加载器必须返回全量数据集</span>，否则会删掉不该删的</td></tr>
+            <tr><td><code>scoped_full</code></td><td>只清理本次出现过的 source_id 范围</td><td><strong>最安全的默认值</strong>，代价是内存里要记住这批 source_id；整源下线同样发现不了，需定期跑一次 <code>full</code> 对账</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 250" style="--w:760" role="img" aria-label="加载器只返回来源 A 时，incremental 与 scoped_full 只删 A3，full 会误删来源 B 和 C 的全部记录"><defs></defs>
+<text x="251" y="16" class="c cap">来源 A</text>
+<text x="401" y="16" class="c cap">来源 B</text>
+<text x="523" y="16" class="c cap">来源 C</text>
+<text x="16" y="45" class="md b">索引现状</text>
+<rect x="170" y="26" width="50" height="28" rx="4" class="box"/>
+<text x="195" y="44" class="c xs mono">A1</text>
+<rect x="226" y="26" width="50" height="28" rx="4" class="box"/>
+<text x="251" y="44" class="c xs mono">A2</text>
+<rect x="282" y="26" width="50" height="28" rx="4" class="box"/>
+<text x="307" y="44" class="c xs mono">A3</text>
+<rect x="348" y="26" width="50" height="28" rx="4" class="box"/>
+<text x="373" y="44" class="c xs mono">B1</text>
+<rect x="404" y="26" width="50" height="28" rx="4" class="box"/>
+<text x="429" y="44" class="c xs mono">B2</text>
+<rect x="470" y="26" width="50" height="28" rx="4" class="box"/>
+<text x="495" y="44" class="c xs mono">C1</text>
+<rect x="526" y="26" width="50" height="28" rx="4" class="box"/>
+<text x="551" y="44" class="c xs mono">C2</text>
+<text x="596" y="45" class="sm mute">三个来源共 7 块</text>
+<text x="16" y="87" class="md b">本批加载器返回</text>
+<rect x="170" y="68" width="50" height="28" rx="4" class="acc"/>
+<text x="195" y="86" class="c xs mono b t-acc">A1</text>
+<rect x="226" y="68" width="50" height="28" rx="4" class="acc"/>
+<text x="251" y="86" class="c xs mono b t-acc">A2</text>
+<rect x="282" y="68" width="50" height="28" rx="4" class="ghost"/>
+<text x="307" y="86" class="c xs mute">已删</text>
+<rect x="348" y="68" width="106" height="28" rx="4" class="ghost"/>
+<text x="401" y="86" class="c xs mute">未返回</text>
+<rect x="470" y="68" width="106" height="28" rx="4" class="ghost"/>
+<text x="523" y="86" class="c xs mute">未返回</text>
+<text x="596" y="87" class="sm mute">只返回 A；A3 已从原文删除</text>
+<line x1="16" y1="110" x2="744" y2="110" class="ln-faint"/>
+<text x="16" y="143" class="md mono b">incremental</text>
+<rect x="170" y="124" width="50" height="28" rx="4" class="box"/>
+<text x="195" y="142" class="c xs mono">A1</text>
+<rect x="226" y="124" width="50" height="28" rx="4" class="box"/>
+<text x="251" y="142" class="c xs mono">A2</text>
+<rect x="282" y="124" width="50" height="28" rx="4" class="bad"/>
+<text x="307" y="142" class="c xs mono b t-bad">A3</text>
+<line x1="290" y1="146" x2="324" y2="130" class="ln-bad"/>
+<rect x="348" y="124" width="50" height="28" rx="4" class="box"/>
+<text x="373" y="142" class="c xs mono">B1</text>
+<rect x="404" y="124" width="50" height="28" rx="4" class="box"/>
+<text x="429" y="142" class="c xs mono">B2</text>
+<rect x="470" y="124" width="50" height="28" rx="4" class="box"/>
+<text x="495" y="142" class="c xs mono">C1</text>
+<rect x="526" y="124" width="50" height="28" rx="4" class="box"/>
+<text x="551" y="142" class="c xs mono">C2</text>
+<text x="596" y="143" class="sm">删 A3 · 每批写完即清理</text>
+<text x="16" y="185" class="md mono b">full</text>
+<rect x="170" y="166" width="50" height="28" rx="4" class="box"/>
+<text x="195" y="184" class="c xs mono">A1</text>
+<rect x="226" y="166" width="50" height="28" rx="4" class="box"/>
+<text x="251" y="184" class="c xs mono">A2</text>
+<rect x="282" y="166" width="50" height="28" rx="4" class="bad"/>
+<text x="307" y="184" class="c xs mono b t-bad">A3</text>
+<line x1="290" y1="188" x2="324" y2="172" class="ln-bad"/>
+<rect x="348" y="166" width="50" height="28" rx="4" class="bad"/>
+<text x="373" y="184" class="c xs mono b t-bad">B1</text>
+<line x1="356" y1="188" x2="390" y2="172" class="ln-bad"/>
+<rect x="404" y="166" width="50" height="28" rx="4" class="bad"/>
+<text x="429" y="184" class="c xs mono b t-bad">B2</text>
+<line x1="412" y1="188" x2="446" y2="172" class="ln-bad"/>
+<rect x="470" y="166" width="50" height="28" rx="4" class="bad"/>
+<text x="495" y="184" class="c xs mono b t-bad">C1</text>
+<line x1="478" y1="188" x2="512" y2="172" class="ln-bad"/>
+<rect x="526" y="166" width="50" height="28" rx="4" class="bad"/>
+<text x="551" y="184" class="c xs mono b t-bad">C2</text>
+<line x1="534" y1="188" x2="568" y2="172" class="ln-bad"/>
+<text x="596" y="185" class="sm b t-bad">删 A3，并误删 B、C</text>
+<text x="16" y="227" class="md mono b">scoped_full</text>
+<rect x="170" y="208" width="50" height="28" rx="4" class="box"/>
+<text x="195" y="226" class="c xs mono">A1</text>
+<rect x="226" y="208" width="50" height="28" rx="4" class="box"/>
+<text x="251" y="226" class="c xs mono">A2</text>
+<rect x="282" y="208" width="50" height="28" rx="4" class="bad"/>
+<text x="307" y="226" class="c xs mono b t-bad">A3</text>
+<line x1="290" y1="230" x2="324" y2="214" class="ln-bad"/>
+<rect x="348" y="208" width="50" height="28" rx="4" class="box"/>
+<text x="373" y="226" class="c xs mono">B1</text>
+<rect x="404" y="208" width="50" height="28" rx="4" class="box"/>
+<text x="429" y="226" class="c xs mono">B2</text>
+<rect x="470" y="208" width="50" height="28" rx="4" class="box"/>
+<text x="495" y="226" class="c xs mono">C1</text>
+<rect x="526" y="208" width="50" height="28" rx="4" class="box"/>
+<text x="551" y="226" class="c xs mono">C2</text>
+<text x="596" y="227" class="sm">删 A3 · 全部写完后清理</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 10</span>同一批只加载了来源 A 时，三种模式的结果。<code>full</code> 把「本批没返回」当成「已删除」，所以加载器必须返回全量；另两种只在本批出现过的来源里清理，不会误删，但整源下线（比如 C 真的不要了）也发现不了，需要定期跑一次 <code>full</code> 对账。</figcaption>
+      </figure>
+
+      <h4>两个必须知道的陷阱</h4>
+      <div class="callout warn">
+        <span class="tag">陷阱一 · 一致性</span>
+        <p>记录表与向量库是两套存储。<strong>记录写成功、向量写失败</strong>会留下静默不一致 —— 系统认为这块已索引，实际检索不到。要么做补偿重试，要么周期性对账。</p>
+      </div>
+      <div class="callout warn">
+        <span class="tag">陷阱二 · 换模型</span>
+        <p>更换 embedding 模型后 hash 没变，增量逻辑会<strong>全部跳过</strong>，结果是新旧向量混在同一个索引里。这种污染极难发现，表现为检索质量无端下降。</p>
+        <p><strong>解法：把模型标识纳入 hash 计算。</strong><code>hash(content + metadata + model_id + chunk_params)</code> —— 换模型或改分块参数时自动触发全量重建。</p>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="retrieve">
+      <div class="sec-head"><span class="sec-num">4</span><h2>检索侧</h2></div>
+      <p class="sec-sub">混合召回打底，重排收口，上下文预算贯穿始终。</p>
+
+      <h3><span class="h3n">4.1</span>混合检索与 RRF</h3>
+      <p>向量召回与 BM25 召回并行，用 <strong>Reciprocal Rank Fusion</strong> 融合：</p>
+
+      <pre><code>score(d) = Σ  1 / (k + rank<sub>i</sub>(d))        k = 60
+         i∈检索器
+
+<span class="cm"># rank 从 1 开始；未命中的检索器对该文档不贡献分数</span>
+<span class="cm"># k=60 来自原论文，直接沿用，几乎不需要调</span></code></pre>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 318" style="--w:760" role="img" aria-label="RRF 算例：B 在两路分别排第 2 和第 1，总分 0.0325 超过向量路第一的 A；只出现在一路的文档排在后面"><defs><marker id="r-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="r-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<path d="M240,44 C379,44 379,122 518,122" class="ln-acc" marker-end="url(#r-b)"/>
+<path d="M240,80 C379,80 379,86 518,86" class="ln-acc" marker-end="url(#r-b)"/>
+<path d="M240,116 C379,116 379,194 518,194" class="ln" marker-end="url(#r-a)"/>
+<path d="M240,152 C379,152 379,230 518,230" class="ln" marker-end="url(#r-a)"/>
+<path d="M240,220 C379,220 379,86 518,86" class="ln-acc" marker-end="url(#r-b)"/>
+<path d="M240,256 C379,256 379,158 518,158" class="ln" marker-end="url(#r-a)"/>
+<path d="M240,292 C379,292 379,122 518,122" class="ln-acc" marker-end="url(#r-b)"/>
+<text x="16" y="20" class="md b">向量召回</text>
+<text x="94" y="20" class="cap">余弦</text>
+<text x="232" y="20" class="e cap">1/(60+r)</text>
+<rect x="16" y="30" width="224" height="28" rx="4" class="sunk"/>
+<text x="28" y="48" class="c xs mono mute">1</text>
+<rect x="44" y="34" width="36" height="20" rx="4" class="acc"/>
+<text x="62" y="48.5" class="c md b t-acc">A</text>
+<text x="94" y="48" class="xs mono mute">.82</text>
+<text x="232" y="48" class="e sm mono">1/61</text>
+<rect x="16" y="66" width="224" height="28" rx="4" class="sunk"/>
+<text x="28" y="84" class="c xs mono mute">2</text>
+<rect x="44" y="70" width="36" height="20" rx="4" class="acc"/>
+<text x="62" y="84.5" class="c md b t-acc">B</text>
+<text x="94" y="84" class="xs mono mute">.79</text>
+<text x="232" y="84" class="e sm mono">1/62</text>
+<rect x="16" y="102" width="224" height="28" rx="4" class="sunk"/>
+<text x="28" y="120" class="c xs mono mute">3</text>
+<rect x="44" y="106" width="36" height="20" rx="4" class="box"/>
+<text x="62" y="120.5" class="c md b">C</text>
+<text x="94" y="120" class="xs mono mute">.77</text>
+<text x="232" y="120" class="e sm mono">1/63</text>
+<rect x="16" y="138" width="224" height="28" rx="4" class="sunk"/>
+<text x="28" y="156" class="c xs mono mute">4</text>
+<rect x="44" y="142" width="36" height="20" rx="4" class="box"/>
+<text x="62" y="156.5" class="c md b">D</text>
+<text x="94" y="156" class="xs mono mute">.71</text>
+<text x="232" y="156" class="e sm mono">1/64</text>
+<text x="16" y="196" class="md b">BM25 召回</text>
+<text x="94" y="196" class="cap">BM25 分</text>
+<text x="232" y="196" class="e cap">1/(60+r)</text>
+<rect x="16" y="206" width="224" height="28" rx="4" class="sunk"/>
+<text x="28" y="224" class="c xs mono mute">1</text>
+<rect x="44" y="210" width="36" height="20" rx="4" class="acc"/>
+<text x="62" y="224.5" class="c md b t-acc">B</text>
+<text x="94" y="224" class="xs mono mute">18.4</text>
+<text x="232" y="224" class="e sm mono">1/61</text>
+<rect x="16" y="242" width="224" height="28" rx="4" class="sunk"/>
+<text x="28" y="260" class="c xs mono mute">2</text>
+<rect x="44" y="246" width="36" height="20" rx="4" class="box"/>
+<text x="62" y="260.5" class="c md b">E</text>
+<text x="94" y="260" class="xs mono mute">12.1</text>
+<text x="232" y="260" class="e sm mono">1/62</text>
+<rect x="16" y="278" width="224" height="28" rx="4" class="sunk"/>
+<text x="28" y="296" class="c xs mono mute">3</text>
+<rect x="44" y="282" width="36" height="20" rx="4" class="acc"/>
+<text x="62" y="296.5" class="c md b t-acc">A</text>
+<text x="94" y="296" class="xs mono mute">9.7</text>
+<text x="232" y="296" class="e sm mono">1/63</text>
+<text x="520" y="60" class="md b">RRF 融合</text>
+<text x="740" y="60" class="e cap">Σ 1/(60+r)</text>
+<rect x="520" y="72" width="224" height="28" rx="4" class="sunk"/>
+<text x="532" y="90" class="c xs mono mute">1</text>
+<rect x="546" y="76" width="36" height="20" rx="4" class="acc"/>
+<text x="564" y="90.5" class="c md b t-acc">B</text>
+<text x="594" y="90" class="xs mono mute">1/62 + 1/61</text>
+<text x="738" y="90" class="e sm mono b">.0325</text>
+<rect x="520" y="108" width="224" height="28" rx="4" class="sunk"/>
+<text x="532" y="126" class="c xs mono mute">2</text>
+<rect x="546" y="112" width="36" height="20" rx="4" class="acc"/>
+<text x="564" y="126.5" class="c md b t-acc">A</text>
+<text x="594" y="126" class="xs mono mute">1/61 + 1/63</text>
+<text x="738" y="126" class="e sm mono b">.0323</text>
+<rect x="520" y="144" width="224" height="28" rx="4" class="sunk"/>
+<text x="532" y="162" class="c xs mono mute">3</text>
+<rect x="546" y="148" width="36" height="20" rx="4" class="box"/>
+<text x="564" y="162.5" class="c md b">E</text>
+<text x="594" y="162" class="xs mono mute">1/62</text>
+<text x="738" y="162" class="e sm mono b">.0161</text>
+<rect x="520" y="180" width="224" height="28" rx="4" class="sunk"/>
+<text x="532" y="198" class="c xs mono mute">4</text>
+<rect x="546" y="184" width="36" height="20" rx="4" class="box"/>
+<text x="564" y="198.5" class="c md b">C</text>
+<text x="594" y="198" class="xs mono mute">1/63</text>
+<text x="738" y="198" class="e sm mono b">.0159</text>
+<rect x="520" y="216" width="224" height="28" rx="4" class="sunk"/>
+<text x="532" y="234" class="c xs mono mute">5</text>
+<rect x="546" y="220" width="36" height="20" rx="4" class="box"/>
+<text x="564" y="234.5" class="c md b">D</text>
+<text x="594" y="234" class="xs mono mute">1/64</text>
+<text x="738" y="234" class="e sm mono b">.0156</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 11</span>RRF 只看名次。B 在两路分别排第 2 和第 1，总分超过向量路第一的 A；只在一路出现的 E、C、D 排在后面。左侧原始分 .82 与 18.4 不在同一量纲，计算中没有用到它们。</figcaption>
+      </figure>
+
+      <p>RRF 按<strong>排名</strong>而非原始分数融合，因此不需要跨系统归一化分数 —— 这正是它成为默认选择的原因。BM25 的分数与余弦相似度本就不在同一量纲，任何加权求和都需要先解决这个问题，而 RRF 绕过了它。</p>
+      <p>多个独立评测显示，RRF 融合在<strong>全部指标、全部数据子集</strong>上优于任一单路检索。</p>
+
+      <h3><span class="h3n">4.2</span>重排：单项收益最大的一步</h3>
+      <p>共识非常一致：混合检索打底，加一个 cross-encoder 重排，是单步收益最大的改动。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 300" style="--w:760" role="img" aria-label="召回用双编码器扫全库，重排用交叉编码器逐对打分，只能放在召回收窄之后"><defs><marker id="n-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="26" y="34" width="300" height="44" rx="5" class="acc"/>
+<text x="176" y="53" class="c b t-acc">召回 50–150 条</text>
+<text x="176" y="69" class="c xs mute">向量 + BM25 并行</text>
+<line x1="176" y1="78" x2="176" y2="108" class="ln" marker-end="url(#n-a)"/>
+<rect x="66" y="110" width="220" height="38" rx="5" class="box"/>
+<text x="176" y="133.5" class="c b">RRF 融合 · 去重</text>
+<line x1="176" y1="148" x2="176" y2="178" class="ln" marker-end="url(#n-a)"/>
+<rect x="96" y="180" width="160" height="42" rx="5" class="warm"/>
+<text x="176" y="198" class="c b t-warm">重排 → 5–20 条</text>
+<text x="176" y="214" class="c xs mute">交叉编码器逐对打分</text>
+<line x1="176" y1="222" x2="176" y2="250" class="ln" marker-end="url(#n-a)"/>
+<rect x="126" y="252" width="100" height="32" rx="5" class="sunk"/>
+<text x="176" y="272.5" class="c md b">送入上下文</text>
+<text x="376" y="22" class="cap">双编码器 · 召回阶段</text>
+<rect x="376" y="34" width="52" height="22" rx="5" class="box"/>
+<text x="402" y="49.5" class="c md">查询</text>
+<line x1="428" y1="45" x2="446" y2="45" class="ln" marker-end="url(#n-a)"/>
+<rect x="448" y="34" width="64" height="22" rx="5" class="box"/>
+<text x="480" y="49.5" class="c md">编码器</text>
+<line x1="512" y1="45" x2="530" y2="45" class="ln" marker-end="url(#n-a)"/>
+<rect x="532" y="39" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="542" y="39" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="552" y="39" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="562" y="39" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="572" y="39" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="376" y="66" width="52" height="22" rx="5" class="ghost"/>
+<text x="402" y="81.5" class="c md mute">文档</text>
+<line x1="428" y1="77" x2="446" y2="77" class="ln dash" marker-end="url(#n-a)"/>
+<rect x="448" y="66" width="64" height="22" rx="5" class="ghost"/>
+<text x="480" y="81.5" class="c md mute">编码器</text>
+<line x1="512" y1="77" x2="530" y2="77" class="ln dash" marker-end="url(#n-a)"/>
+<rect x="532" y="71" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="542" y="71" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="552" y="71" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="562" y="71" width="9" height="12" rx="1.5" class="acc"/>
+<rect x="572" y="71" width="9" height="12" rx="1.5" class="acc"/>
+<line x1="583" y1="45" x2="606" y2="55" class="ln"/>
+<line x1="583" y1="77" x2="606" y2="67" class="ln"/>
+<circle cx="618" cy="61" r="13" class="box"/>
+<text x="618" y="64.5" class="c xs mono">cos</text>
+<line x1="631" y1="61" x2="650" y2="61" class="ln" marker-end="url(#n-a)"/>
+<text x="654" y="65" class="md">相似度</text>
+<text x="376" y="104" class="xs mute">虚线部分在摄入时已算好，查询时只编码一次查询</text>
+<text x="376" y="134" class="sm mute">只做名次运算，没有模型调用</text>
+<text x="376" y="172" class="cap">交叉编码器 · 重排阶段</text>
+<rect x="376" y="186" width="120" height="28" rx="5" class="box"/>
+<line x1="436" y1="186" x2="436" y2="214" class="ln-faint"/>
+<text x="406" y="204.5" class="c md">查询</text>
+<text x="466" y="204.5" class="c md">文档</text>
+<line x1="496" y1="200" x2="514" y2="200" class="ln" marker-end="url(#n-a)"/>
+<rect x="516" y="186" width="100" height="28" rx="5" class="warm"/>
+<text x="566" y="204.5" class="c md b t-warm">交叉编码器</text>
+<line x1="616" y1="200" x2="634" y2="200" class="ln" marker-end="url(#n-a)"/>
+<text x="640" y="204.5" class="md b">分数</text>
+<text x="376" y="236" class="sm t-warm">每个候选都要一次完整前向</text>
+<text x="376" y="252" class="sm mute">所以只能放在召回收窄之后</text>
+<text x="376" y="272" class="sm mute">条数由上下文预算决定（见 4.4）</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 12</span>召回和重排用的是两种模型。双编码器把查询和文档分开编码，文档侧在摄入时就算好，所以能扫全库；交叉编码器把查询和文档拼在一起过模型，精度更高，但每个候选都要一次前向，只能放在收窄之后。</figcaption>
+      </figure>
+      <p style="font-size:.84rem;color:var(--muted);margin-top:-8px">Anthropic 的配置是召回 150 重排到 20；他们同时发现 <strong>top-20 明显优于 top-5 与 top-10</strong>。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>模型</th><th>许可</th><th>取舍</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Qwen3-Reranker</strong></td><td>Apache 2.0</td><td>开源权重质量第一梯队</td></tr>
+            <tr><td><strong>BGE-reranker-v2-m3</strong></td><td>宽松</td><td>部署量最大的稳妥默认值，多语言表现均衡</td></tr>
+            <tr><td><strong>ms-marco-MiniLM 系列</strong></td><td>宽松</td><td>延迟最低，质量明显下降；适合强延迟约束</td></tr>
+            <tr><td><strong>ColBERT / late-interaction</strong></td><td>视模型</td><td>质量好，但多向量使<strong>存储与延迟成本增加数倍</strong></td></tr>
+            <tr><td>Cohere / Voyage API</td><td>—</td><td>省部署，按量计费，数据出境</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <span class="tag">不要照搬延迟数字</span>
+        <p>公开的重排延迟数据差异极大 —— 同类模型从个位数毫秒到数百毫秒的报告都有，取决于硬件、批大小与候选数。<strong>必须在自己的硬件和候选规模上实测</strong>，这是少数无法靠读资料替代的环节。</p>
+      </div>
+
+      <h3><span class="h3n">4.3</span>查询侧处理</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>手段</th><th>解决什么</th><th>代价</th></tr></thead>
+          <tbody>
+            <tr><td><strong>指代消解</strong></td><td>多轮对话中「它的参数是什么」检索不到任何东西</td><td>一次小模型调用，<strong>多轮场景必做</strong></td></tr>
+            <tr><td><strong>查询改写</strong></td><td>口语化提问与文档用词不匹配</td><td>一次 LLM 调用，可与消解合并</td></tr>
+            <tr><td><strong>多查询扩展</strong></td><td>单一表述召回面窄</td><td>并行检索后去重，提升稳定且便宜</td></tr>
+            <tr><td><strong>过滤前置</strong></td><td>权限、时间范围、文档类型</td><td>几乎无额外成本，但必须在检索内部</td></tr>
+            <tr><td><strong>HyDE</strong></td><td>问题与答案的表述差距大</td><td>生成假设答案再检索；收益不稳定，先评测再上</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><span class="h3n">4.4</span>上下文预算是稀缺资源</h3>
+      <p>检索结果应当<strong>分级返回</strong>：</p>
+      <ul>
+        <li><strong>第一级</strong>　标识 + 一句话摘要 + 来源定位。用于让模型（或人）判断要不要看。</li>
+        <li><strong>第二级</strong>　按需取回完整内容。</li>
+      </ul>
+      <p>给 Agent 用的检索工具尤其要这样设计。<strong>把完整内容一次性全塞回去，是 Agent 场景里最常见的 context 浪费</strong> —— 模型往往只需要其中一条，却为全部付了代价，还要在噪声里挑。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 176" style="--w:760" role="img" aria-label="一次全量返回 5 条全文约 4000 token，其中 3 条用不上；分级返回 5 条摘要加 2 条全文约 1900 token"><defs></defs>
+<text x="744" y="14" class="e cap">示意：全文约 800 token / 条，摘要约 60 token / 条</text>
+<text x="16" y="58" class="md b">一次全量返回</text>
+<text x="16" y="75" class="xs mute">5 条 × 全文</text>
+<rect x="180" y="50" width="94" height="24" rx="2" class="mark"><title>用到的全文 · 800 token</title></rect>
+<rect x="276" y="50" width="94" height="24" rx="2" class="mark"><title>用到的全文 · 800 token</title></rect>
+<rect x="372" y="50" width="94" height="24" rx="2" class="seg-waste"><title>用不上的全文 · 800 token</title></rect>
+<rect x="468" y="50" width="94" height="24" rx="2" class="seg-waste"><title>用不上的全文 · 800 token</title></rect>
+<rect x="564" y="50" width="94" height="24" rx="2" class="seg-waste"><title>用不上的全文 · 800 token</title></rect>
+<text x="666" y="66.5" class="md b">4,000 token</text>
+<text x="275" y="42" class="c xs mute">用到 2 条 · 1,600</text>
+<text x="515" y="42" class="c xs mute">用不上 3 条 · 2,400</text>
+<text x="16" y="128" class="md b">分级返回</text>
+<text x="16" y="145" class="xs mute">摘要 → 按需取全文</text>
+<rect x="180" y="120" width="5.2" height="24" rx="2" class="seg-sum"><title>摘要 · 60 token</title></rect>
+<rect x="187.2" y="120" width="5.2" height="24" rx="2" class="seg-sum"><title>摘要 · 60 token</title></rect>
+<rect x="194.4" y="120" width="5.2" height="24" rx="2" class="seg-sum"><title>摘要 · 60 token</title></rect>
+<rect x="201.6" y="120" width="5.2" height="24" rx="2" class="seg-sum"><title>摘要 · 60 token</title></rect>
+<rect x="208.8" y="120" width="5.2" height="24" rx="2" class="seg-sum"><title>摘要 · 60 token</title></rect>
+<rect x="216" y="120" width="94" height="24" rx="2" class="mark"><title>按需取回的全文 · 800 token</title></rect>
+<rect x="312" y="120" width="94" height="24" rx="2" class="mark"><title>按需取回的全文 · 800 token</title></rect>
+<text x="414" y="136.5" class="md b">1,900 token</text>
+<text x="180" y="160" class="xs mute">5 条摘要 · 300</text>
+<text x="311" y="112" class="c xs mute">按需取回 2 条 · 1,600</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 13</span>同样拿到需要的 2 条，分级返回少用一半多的上下文。数字为示意：5 条命中，每条全文约 800 token、摘要约 60 token；差距随命中数与全文长度放大，Agent 多轮调用时还会累积。</figcaption>
+      </figure>
+    </section>
+
+    <!-- 5 -->
+    <section id="graph">
+      <div class="sec-head"><span class="sec-num">5</span><h2>图检索：什么时候才需要</h2></div>
+      <p class="sec-sub">解决的是单一问题，不是通用升级。</p>
+
+      <p>GraphRAG 针对的是<strong>答案需要跨多个文档聚合关系</strong>的问题 —— 「A 和 B 的关系经历了哪些阶段」、「这个概念在哪些模块之间传递」。普通向量检索对这类问题无能为力，因为<em>答案不存在于任何单个 chunk 里</em>。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 250" style="--w:760" role="img" aria-label="关系型问题的答案分散在三个文档的 chunk 里，向量检索召回不到第三段；实体图把三段的关系连成路径，答案在第三跳"><defs><marker id="o-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="230" y="12" width="300" height="30" rx="5" class="box"/>
+<text x="380" y="32" class="c">订单服务改动会影响哪些团队？</text>
+<rect x="16" y="62" width="320" height="50" rx="5" class="acc"/>
+<text x="28" y="81" class="xs mono mute">架构文档 · chunk 12</text>
+<text x="324" y="81" class="e xs b t-acc">向量命中</text>
+<text x="28" y="101" class="md">① 订单服务把事件写入 order-events</text>
+<rect x="16" y="124" width="320" height="50" rx="5" class="box"/>
+<text x="28" y="143" class="xs mono mute">结算手册 · chunk 3</text>
+<text x="324" y="143" class="e xs b mute">相关度低</text>
+<text x="28" y="163" class="md">② 结算服务消费 order-events</text>
+<rect x="16" y="186" width="320" height="50" rx="5" class="box"/>
+<text x="28" y="205" class="xs mono mute">团队目录 · chunk 40</text>
+<text x="324" y="205" class="e xs b t-bad">召回不到</text>
+<text x="28" y="225" class="md">③ 财务平台组负责维护结算服务</text>
+<line x1="342" y1="149" x2="392" y2="149" class="ln" marker-end="url(#o-a)"/>
+<text x="367" y="141" class="c xs mute">抽取</text>
+<rect x="396" y="56" width="348" height="180" rx="6" class="band"/>
+<text x="408" y="229" class="cap">由 ①②③ 抽出的实体与关系</text>
+<rect x="420" y="72" width="100" height="30" rx="5" class="acc"/>
+<text x="470" y="91.5" class="c md b t-acc">订单服务</text>
+<rect x="600" y="72" width="124" height="30" rx="5" class="box"/>
+<text x="662" y="91.5" class="c md mono">order-events</text>
+<rect x="612" y="170" width="100" height="30" rx="5" class="box"/>
+<text x="662" y="189.5" class="c md b">结算服务</text>
+<rect x="410" y="170" width="120" height="30" rx="5" class="warm"/>
+<text x="470" y="189.5" class="c md b t-warm">财务平台组</text>
+<line x1="520" y1="87" x2="598" y2="87" class="ln" marker-end="url(#o-a)"/>
+<text x="559" y="80" class="c xs">① 写入</text>
+<line x1="662" y1="170" x2="662" y2="104" class="ln" marker-end="url(#o-a)"/>
+<text x="670" y="141" class="xs">② 消费</text>
+<line x1="530" y1="185" x2="610" y2="185" class="ln" marker-end="url(#o-a)"/>
+<text x="570" y="178" class="c xs">③ 维护</text>
+<text x="470" y="162" class="c xs b t-warm">答案</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 14</span>关系型问题的答案不在任何一个 chunk 里。向量检索按与问题的相似度各自命中片段：① 命中，③ 与问题几乎没有共同的词，召回不到。图把三段里抽出的边连成路径，答案「财务平台组」在第三跳。</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方案</th><th>许可</th><th>取舍</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Microsoft GraphRAG</strong></td><td>MIT</td><td>参考实现，概念完整；索引阶段大量 LLM 调用，成本高</td></tr>
+            <tr><td><strong>LightRAG</strong></td><td>开源</td><td>知识图谱 + 向量检索结合，提供 naive / local / global / hybrid / mix 五种查询模式，成本显著低于前者</td></tr>
+            <tr><td><strong>nano-graphrag</strong></td><td>开源</td><td>最小实现，模块化易定制，适合读懂原理后自己改</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <span class="tag">判断标准</span>
+        <p>只有一条：<strong>你的问题是否需要跨文档关系聚合。</strong>如果多数问题是定点查找，图索引的建设与维护成本不会回本 —— 实体抽取与关系消歧本身就是一个需要持续维护的子系统。</p>
+        <p>先把混合检索 + 重排做扎实，遇到明确的关系型问题再上图。</p>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section id="eval">
+      <div class="sec-head"><span class="sec-num">6</span><h2>评测：没有评测等于没有知识库</h2></div>
+      <p class="sec-sub">开源实践里最被跳过、也最致命的一环。</p>
+
+      <p>没有评测就无法判断任何改动是改进还是退步，调优会退化成玄学 —— 换个分块大小、换个模型、改个 prompt，全凭感觉。</p>
+
+      <h3><span class="h3n">6.1</span>先建 golden set</h3>
+      <p><strong>50–200 条真实问题 + 标注的正确来源，由领域内的人写。</strong>规模不重要，代表性才重要。这个集合是所有后续决策的裁判。</p>
+      <ul>
+        <li>问题来自真实使用场景，不要让 LLM 凭空生成 —— 合成问题只能用来<em>扩充</em>，不能用来<em>定义</em>基线</li>
+        <li>必须包含难例：精确标识符、跨文档、否定式提问、语料中不存在答案的问题</li>
+        <li>「不存在答案」这类用例尤其重要，它测的是系统会不会编</li>
+      </ul>
+
+      <h3><span class="h3n">6.2</span>检索与生成分开评</h3>
+      <p>聚合分数会掩盖问题 —— 检索错了和生成跑偏，看起来都是「答案不对」，但修复方向完全相反。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>层</th><th>指标</th><th>回答什么</th></tr></thead>
+          <tbody>
+            <tr><td rowspan="2">检索</td><td><code>context recall</code></td><td>该找到的内容找到了吗</td></tr>
+            <tr><td><code>context precision</code> · <code>MRR</code> · <code>nDCG@k</code></td><td>找到的内容排得靠前吗</td></tr>
+            <tr><td rowspan="2">生成</td><td><code>faithfulness</code></td><td>答案是否忠于检索到的内容（反幻觉）</td></tr>
+            <tr><td><code>answer relevance</code></td><td>答案是否真的回答了问题</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 294" style="--w:760" role="img" aria-label="检索指标量问题与上下文并对照标注来源，忠实度量上下文与答案，相关性量问题与答案"><defs><marker id="e-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="e-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="310" y="36" class="c cap t-acc">检索层</text>
+<rect x="40" y="50" width="160" height="44" rx="5" class="box"/>
+<text x="120" y="69" class="c b">问题</text>
+<text x="120" y="85" class="c sm mute">来自 golden set</text>
+<rect x="420" y="50" width="160" height="44" rx="5" class="box"/>
+<text x="500" y="69" class="c b">检索到的上下文</text>
+<text x="500" y="85" class="c xs mono mute">top-k chunk</text>
+<rect x="624" y="50" width="120" height="44" rx="5" class="sunk"/>
+<text x="684" y="69" class="c b">标注来源</text>
+<text x="684" y="85" class="c sm mute">人工标注</text>
+<rect x="230" y="214" width="160" height="44" rx="5" class="box"/>
+<text x="310" y="233" class="c b">答案</text>
+<text x="310" y="249" class="c sm mute">模型生成</text>
+<line x1="200" y1="72" x2="418" y2="72" class="ln-acc" marker-end="url(#e-b)"/>
+<text x="310" y="63" class="c md b t-acc">context recall · precision</text>
+<text x="310" y="88" class="c xs mono mute">MRR · nDCG@k</text>
+<line x1="580" y1="72" x2="622" y2="72" class="ln dash"/>
+<text x="601" y="64" class="c xs mute">对照</text>
+<line x1="470" y1="94" x2="372" y2="212" class="ln-warm" marker-end="url(#e-w)"/>
+<text x="436" y="150" class="md b t-warm">faithfulness</text>
+<text x="436" y="166" class="xs mute">答案有没有依据</text>
+<line x1="150" y1="94" x2="248" y2="212" class="ln-warm" marker-end="url(#e-w)"/>
+<text x="184" y="150" class="e md b t-warm">answer relevance</text>
+<text x="184" y="166" class="e xs mute">答的是不是这个问题</text>
+<text x="310" y="280" class="c cap t-warm">生成层</text>
+<rect x="540" y="150" width="204" height="122" rx="5" class="sunk"/>
+<text x="552" y="170" class="md b">看指标定方向</text>
+<text x="552" y="192" class="sm mono b t-acc">recall 低</text>
+<text x="552" y="208" class="xs soft">→ 修检索：分块 · 召回 · 重排</text>
+<text x="552" y="232" class="sm mono b t-warm">recall 高、faithfulness 低</text>
+<text x="552" y="248" class="xs soft">→ 修生成：prompt · 组装</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 15</span>四个指标各量一条边。检索层看问题与上下文，并对照人工标注的来源；生成层看上下文与答案（忠实度）、问题与答案（相关性）。分开量，才知道该修哪一边。</figcaption>
+      </figure>
+
+      <h3><span class="h3n">6.3</span>工具</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>工具</th><th>形态</th><th>适合</th></tr></thead>
+          <tbody>
+            <tr><td><strong>RAGAS</strong></td><td>指标库</td><td>最常用，上述四类核心指标的 LLM-as-judge 实现</td></tr>
+            <tr><td><strong>DeepEval</strong></td><td>测试框架</td><td>pytest 风格，最容易接进 CI</td></tr>
+            <tr><td><strong>TruLens</strong></td><td>追踪 + 评测</td><td>链路可观测，RAG Triad 分析</td></tr>
+            <tr><td><strong>BEIR</strong></td><td>检索基准</td><td>检索器本身的横向对比，不评生成</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>目前没有单一框架形成统治，按形态选即可 —— <strong>选哪个远不如「有没有」重要。</strong></p>
+
+      <h3><span class="h3n">6.4</span>放进 CI</h3>
+      <p>分块参数、模型版本、prompt 的每一次改动都跑一次。没有这条回归防线，知识库的质量只会<strong>随时间单调下降</strong>：每个人都只改了一点点，没人知道是哪一次改坏的。</p>
+      <div class="callout">
+        <span class="tag">最小闭环</span>
+        <p>golden set（50 条）→ 检索指标脚本 → CI 上跑 → 指标下降超过阈值就拦住 PR。这套东西一天能搭完，<strong>比后面所有调优加起来都重要。</strong></p>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="agent">
+      <div class="sec-head"><span class="sec-num">7</span><h2>Agentic 与接入层</h2></div>
+      <p class="sec-sub">检索正在从「生成前的固定前置步骤」变成「模型可以反复调用的工具」。</p>
+
+      <p>模型自己决定检索几次、用什么词、要不要换个角度再查一次。这改变了接入层的设计重心：<strong>从「返回最好的结果」变成「让模型容易用对」</strong>。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>设计</th><th>理由</th></tr></thead>
+          <tbody>
+            <tr><td><strong>接受查询数组而非单个查询</strong></td><td>并行检索后去重。在工具描述里明确要求模型一次给出多个同义表达，比事后扩展更准</td></tr>
+            <tr><td><strong>限制单次返回条目数</strong></td><td>通常 ≤ 5，防止 context 爆炸</td></tr>
+            <tr><td><strong>详情按需获取</strong></td><td>完整内容默认不返回，由模型决定对哪几条深入</td></tr>
+            <tr><td><strong>读写分离</strong></td><td>检索类只读工具与写入类工具彻底分开，权限与审计都更清晰</td></tr>
+            <tr><td><strong>用工具描述约束行为</strong></td><td>把「先检索再回答」写进工具描述，<strong>比写在系统提示里有效得多</strong></td></tr>
+            <tr><td><strong>返回结构化失败原因</strong></td><td>「无结果」和「查询太宽泛」要可区分，模型才知道怎么重试</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 780 332" style="--w:780" role="img" aria-label="模型多次调用知识库工具：太宽泛的查询得到结构化失败原因，改写后一次提交多个查询，先拿 5 条摘要，再只取 2 条全文作答"><defs><marker id="a-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="a-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="40" y="14" width="120" height="32" rx="5" class="box"/>
+<text x="100" y="34.5" class="c b">模型</text>
+<rect x="380" y="14" width="180" height="32" rx="5" class="box"/>
+<text x="470" y="29" class="c md b">知识库工具</text>
+<text x="470" y="42" class="c xs mute">search · fetch · 只读</text>
+<line x1="100" y1="46" x2="100" y2="322" class="ln-faint dash"/>
+<line x1="470" y1="46" x2="470" y2="322" class="ln-faint dash"/>
+<line x1="100" y1="78" x2="468" y2="78" class="ln" marker-end="url(#a-a)"/>
+<text x="285" y="70" class="c xs mono">search(["部署怎么回滚"])</text>
+<line x1="470" y1="112" x2="102" y2="112" class="ln-warm dash" marker-end="url(#a-w)"/>
+<text x="285" y="104" class="c xs mono t-warm">{ error: "too_broad", hint: "补充服务名" }</text>
+<line x1="100" y1="152" x2="468" y2="152" class="ln" marker-end="url(#a-a)"/>
+<text x="285" y="144" class="c xs mono">search(["订单服务回滚", "rollback", "版本回退"])</text>
+<line x1="470" y1="192" x2="102" y2="192" class="ln dash" marker-end="url(#a-a)"/>
+<text x="285" y="184" class="c xs mono">5 条：id · 摘要 · 来源</text>
+<line x1="100" y1="232" x2="468" y2="232" class="ln" marker-end="url(#a-a)"/>
+<text x="285" y="224" class="c xs mono">fetch(["d12", "d31"])</text>
+<line x1="470" y1="268" x2="102" y2="268" class="ln dash" marker-end="url(#a-a)"/>
+<text x="285" y="260" class="c xs mono">2 条全文</text>
+<rect x="40" y="288" width="160" height="28" rx="5" class="acc"/>
+<text x="120" y="306.5" class="c md b t-acc">作答 · 引用 d12、d31</text>
+<text x="520" y="116" class="md b t-acc">返回结构化失败原因</text>
+<text x="520" y="131" class="xs mute">「无结果」与「太宽泛」可区分</text>
+<text x="520" y="156" class="md b t-acc">一次给多个查询</text>
+<text x="520" y="171" class="xs mute">并行检索后去重</text>
+<text x="520" y="196" class="md b t-acc">最多 5 条，只给摘要</text>
+<text x="520" y="211" class="xs mute">约 300 token</text>
+<text x="520" y="236" class="md b t-acc">详情按需获取</text>
+<text x="520" y="251" class="xs mute">只取模型挑中的 2 条</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 16</span>检索成了模型可以反复调用的工具。第一次查询太宽泛，工具返回可区分的失败原因；模型据此一次给出多个改写，拿到 5 条摘要，再只取其中 2 条全文作答。右侧是每一步对应的接口设计。</figcaption>
+      </figure>
+    </section>
+
+    <!-- 8 -->
+    <section id="rollout">
+      <div class="sec-head"><span class="sec-num">8</span><h2>落地顺序</h2></div>
+      <p class="sec-sub">每一步都要能单独产生价值，不能等全套做完才见效。</p>
+
+      <figure class="fig">
+        <div class="fig-canvas"><svg viewBox="0 0 760 166" style="--w:760" role="img" aria-label="五步落地：第 2 步建立 golden set 评测，第 3 到第 5 步都要先在评测上验收"><defs><marker id="m-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="m-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="196" y="12" width="548" height="28" rx="5" class="acc"/>
+<text x="470" y="31" class="c md b t-acc">golden set 评测 · 每一步都与基线对比，进 CI</text>
+<circle cx="80" cy="92" r="17" class="box"/>
+<text x="80" y="97.5" class="c serif b">1</text>
+<text x="80" y="134" class="c md b">干净输入 + 混合检索</text>
+<text x="80" y="152" class="c xs mute">全部优化的基线</text>
+<circle cx="230" cy="92" r="17" class="acc"/>
+<text x="230" y="97.5" class="c serif b t-acc">2</text>
+<text x="230" y="134" class="c md b">golden set 评测</text>
+<text x="230" y="152" class="c xs mute">先有度量</text>
+<line x1="99" y1="92" x2="209" y2="92" class="ln" marker-end="url(#m-a)"/>
+<circle cx="380" cy="92" r="17" class="box"/>
+<text x="380" y="97.5" class="c serif b">3</text>
+<text x="380" y="134" class="c md b">加重排</text>
+<text x="380" y="152" class="c xs mute">单项收益最大</text>
+<line x1="249" y1="92" x2="359" y2="92" class="ln" marker-end="url(#m-a)"/>
+<circle cx="530" cy="92" r="17" class="box"/>
+<text x="530" y="97.5" class="c serif b">4</text>
+<text x="530" y="134" class="c md b">上下文增强</text>
+<text x="530" y="152" class="c xs mute">摄入成本一次性</text>
+<line x1="399" y1="92" x2="509" y2="92" class="ln" marker-end="url(#m-a)"/>
+<circle cx="680" cy="92" r="17" class="ghost"/>
+<text x="680" y="97.5" class="c serif b">5</text>
+<text x="680" y="134" class="c md b">Agentic / 图检索</text>
+<text x="680" y="152" class="c xs mute">有明确需求再做</text>
+<line x1="549" y1="92" x2="659" y2="92" class="ln" marker-end="url(#m-a)"/>
+<line x1="230" y1="74" x2="230" y2="43" class="ln-acc" marker-end="url(#m-b)"/>
+<text x="238" y="62" class="xs mute">建立</text>
+<line x1="380" y1="41" x2="380" y2="72" class="ln-acc" marker-end="url(#m-b)"/>
+<text x="388" y="62" class="xs mute">验收</text>
+<line x1="530" y1="41" x2="530" y2="72" class="ln-acc" marker-end="url(#m-b)"/>
+<text x="538" y="62" class="xs mute">验收</text>
+<line x1="680" y1="41" x2="680" y2="72" class="ln-acc dash" marker-end="url(#m-b)"/>
+<text x="688" y="62" class="xs mute">验收</text>
+</svg></div>
+        <figcaption><span class="fig-n">图 17</span>评测是第 2 步，不是最后一步。从第 3 步开始，每项改动都先在 golden set 上与基线比较，赢了才留下；第 5 步用虚线，表示它是有条件的。</figcaption>
+      </figure>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-head"><span class="step-n">1</span><span class="step-title">干净输入 + 结构分块 + 混合检索</span></div>
+          <p>解析统一成 Markdown，结构感知递归分块，向量 + BM25 双路 RRF 融合。不碰任何花活，这是后面所有优化的基线。</p>
+          <span class="gate">能稳定回答定点查找类问题，精确标识符不漏</span>
+        </div>
+        <div class="step">
+          <div class="step-head"><span class="step-n">2</span><span class="step-title">golden set 与评测闭环</span></div>
+          <p>在加任何新技术之前先建立度量。没有基线数字，后面每一步都无法判断是否有效。</p>
+          <span class="gate">CI 上能跑出检索指标，改动会触发对比</span>
+        </div>
+        <div class="step">
+          <div class="step-head"><span class="step-n">3</span><span class="step-title">加重排</span></div>
+          <p>单项收益最大，实现成本低。此时应该能在第 2 步建立的评测上看到明确提升。</p>
+          <span class="gate">context precision 明显上升，延迟仍在预算内</span>
+        </div>
+        <div class="step">
+          <div class="step-head"><span class="step-n">4</span><span class="step-title">上下文增强</span></div>
+          <p>Contextual retrieval 或 late chunking，二选一。摄入成本上升，但是一次性的。</p>
+          <span class="gate">跨章节指代类问题的召回提升可量化</span>
+        </div>
+        <div class="step">
+          <div class="step-head"><span class="step-n">5</span><span class="step-title">Agentic 检索与图检索</span></div>
+          <p>前者看 Agent 场景的实际需求，后者看是否真有跨文档关系型问题。<strong>两步都不该在前四步做扎实之前开始。</strong></p>
+          <span class="gate">有明确且反复出现的需求，而不是「听说这个更先进」</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 -->
+    <section id="anti">
+      <div class="sec-head"><span class="sec-num">9</span><h2>反模式清单</h2></div>
+      <p class="sec-sub">以下每一条都在真实项目里反复出现。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>反模式</th><th>后果</th></tr></thead>
+          <tbody>
+            <tr><td>只做向量检索</td><td>精确标识符、错误码、专有名词全部检索不到</td></tr>
+            <tr><td>脏输入直接分块</td><td>噪声污染双路索引，后续调优无法补救</td></tr>
+            <tr><td>没有评测就调参</td><td>无法判断改动方向，调优退化成玄学</td></tr>
+            <tr><td>权限在应用层后筛</td><td>top-k 被无权内容占满，表现为「有权限却搜不到」</td></tr>
+            <tr><td>换模型不重建索引</td><td>新旧向量混杂，质量下降且极难定位</td></tr>
+            <tr><td>对原始源码 / 片段做 embedding</td><td>实现细节淹没意图，相似度失真</td></tr>
+            <tr><td>chunk 即生成单元</td><td>要么检索精度差，要么上下文不完整，二选一</td></tr>
+            <tr><td>语料很小仍上 RAG</td><td>徒增故障点，效果不如全文入提示词</td></tr>
+            <tr><td>查询期做本该摄入期做的事</td><td>成本乘以 QPS，延迟不可控</td></tr>
+            <tr><td>先上 GraphRAG</td><td>建设与维护成本高，多数问题用不上</td></tr>
+            <tr><td>只看榜单不读许可</td><td>上线前才发现模型禁止商用</td></tr>
+            <tr><td>照搬他人的延迟数字</td><td>硬件与候选数不同，结论不可移植</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- refs -->
+    <section id="refs">
+      <div class="sec-head"><span class="sec-num">—</span><h2>参考来源</h2></div>
+      <p class="sec-sub">官方文档与论文优先；标注为实践文章的数字请在自己的语料上复核。</p>
+
+      <div class="ref-group">
+        <h4>核心技术</h4>
+        <ul>
+          <li><a href="https://www.anthropic.com/news/contextual-retrieval">Introducing Contextual Retrieval</a> <span class="src">· Anthropic 官方，35/49/67% 与 $1.02 的出处</span></li>
+          <li><a href="https://arxiv.org/pdf/2504.19754">Reconstructing Context: Evaluating Advanced Chunking Strategies for RAG</a> <span class="src">· arXiv</span></li>
+          <li><a href="https://arxiv.org/html/2604.01733v1">From BM25 to Corrective RAG: Benchmarking Retrieval Strategies</a> <span class="src">· arXiv，RRF 优于单路的证据</span></li>
+          <li><a href="https://arxiv.org/pdf/2608.20845">RAG Deserves an Index: Why Ingest-Time Compilation Beats Query-Time Interpretation</a> <span class="src">· arXiv</span></li>
+          <li><a href="https://arxiv.org/pdf/2507.13334">A Survey of Context Engineering for Large Language Models</a> <span class="src">· arXiv</span></li>
+          <li><a href="https://arxiv.org/pdf/2506.05690">When to use Graphs in RAG</a> <span class="src">· arXiv</span></li>
+        </ul>
+      </div>
+
+      <div class="ref-group">
+        <h4>工程实践</h4>
+        <ul>
+          <li><a href="https://python.langchain.com/docs/how_to/indexing">LangChain Indexing API</a> <span class="src">· 官方文档，record manager 与三种清理语义</span></li>
+          <li><a href="https://dataaspirant.com/blog/hybrid-search/">Hybrid Search Explained: BM25 + Vectors + RRF</a> <span class="src">· 实践文章</span></li>
+          <li><a href="https://blog.premai.io/rag-chunking-strategies-the-2026-benchmark-guide">RAG Chunking Strategies: Benchmark Guide</a> <span class="src">· 实践文章</span></li>
+          <li><a href="https://dataaspirant.com/blog/long-context-vs-rag/">Long Context vs RAG</a> <span class="src">· 实践文章</span></li>
+        </ul>
+      </div>
+
+      <div class="ref-group">
+        <h4>选型</h4>
+        <ul>
+          <li><a href="https://computingforgeeks.com/qdrant-weaviate-milvus-pgvector/">Qdrant / Weaviate / Milvus / pgvector 同机基准</a> <span class="src">· 2x / 4x / 4x 差距的出处</span></li>
+          <li><a href="https://blog.premai.io/best-embedding-models-for-rag-2026-ranked-by-mteb-score-cost-and-self-hosting">Best Embedding Models for RAG</a> <span class="src">· 含许可证对照</span></li>
+          <li><a href="https://www.zeroentropy.dev/articles/open-source-alternatives-to-cohere-rerank">Open-source alternatives to Cohere Rerank</a></li>
+          <li><a href="https://www.spheron.network/blog/self-host-document-intelligence-docling-marker-mineru-rag-guide/">Self-host document intelligence: Docling / Marker / MinerU</a></li>
+          <li><a href="https://github.com/oramasearch/orama">Orama</a> <span class="src">· 浏览器 / 服务端 / 边缘的搜索与 RAG 引擎</span></li>
+          <li><a href="https://github.com/asg017/sqlite-vec">sqlite-vec</a> <span class="src">· SQLite 向量检索扩展</span></li>
+          <li><a href="https://github.com/HKUDS/LightRAG">LightRAG</a> <span class="src">· 轻量 GraphRAG 实现</span></li>
+        </ul>
+      </div>
+
+      <div class="ref-group">
+        <h4>评测</h4>
+        <ul>
+          <li><a href="https://github.com/explodinggradients/ragas">RAGAS</a> · <a href="https://github.com/confident-ai/deepeval">DeepEval</a> · <a href="https://github.com/truera/trulens">TruLens</a> · <a href="https://github.com/beir-cellar/beir">BEIR</a></li>
+        </ul>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="end">
+    方案中的性能与成本数字来自上列来源，其中实践文章的数据在不同硬件与语料上差异明显 ——
+    涉及选型决策时，请在自己的 golden set 上复测。
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var bar = document.getElementById('progress');
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    var sections = links
+      .map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); })
+      .filter(Boolean);
+
+    function onScroll() {
+      var h = document.documentElement.scrollHeight - window.innerHeight;
+      bar.style.width = (h > 0 ? (window.scrollY / h) * 100 : 0) + '%';
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    if ('IntersectionObserver' in window) {
+      var visible = new Set();
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) visible.add(e.target.id);
+          else visible.delete(e.target.id);
+        });
+        var first = sections.find(function (s) { return visible.has(s.id); });
+        links.forEach(function (a) {
+          a.classList.toggle('active', !!first && a.getAttribute('href') === '#' + first.id);
+        });
+      }, { rootMargin: '-10% 0px -70% 0px' });
+      sections.forEach(function (s) { io.observe(s); });
+    }
+  })();
+</script>
+</body>
+</html>

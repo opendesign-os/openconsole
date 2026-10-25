@@ -23,9 +23,7 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./index.ts",
-    "./algorithm": "./core/algorithm/index.ts",
-    "./serialize": "./core/serialize/index.ts"
+    ".": "./index.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -39,5 +37,8 @@
   "dependencies": {
     "@openconsole/queue": "workspace:*",
     "@openconsole/signal": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

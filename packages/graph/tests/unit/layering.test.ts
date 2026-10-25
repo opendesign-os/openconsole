@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { build } from "esbuild";
+import { beforeAll, describe, expect, it } from "vitest";
 
 /**
  * 分层边界的机检。
@@ -14,6 +15,7 @@ import { describe, expect, it } from "vitest";
  */
 
 const CORE = join(import.meta.dirname, "..", "..", "core");
+const ROOT = join(CORE, "..");
 
 const sources = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -89,4 +91,76 @@ describe("模块分层", () => {
       "algorithm/reach.ts": ["component", "search"],
     });
   });
+});
+
+/**
+ * 打包产物的机检。
+ *
+ * 上面那组断言读的是 import 语句——它管得住依赖方向，管不住「摇树到底摇掉了没有」。撤掉
+ * `./algorithm` 子路径之后，「Worker 里只跑算法不打包编辑层」从结构保证降成了打包器行为，
+ * 而行为只能拿产物验：子路径那套的导出一直是残缺的、README 的示例一直跑不通，没被发现的
+ * 原因就是没有任何东西盯着它。
+ */
+
+/** 打一次包，取产物里的顶层声明名。 */
+const declared = async (entry: string): Promise<string[]> => {
+  const { outputFiles } = await build({
+    stdin: {
+      contents: entry,
+      resolveDir: ROOT,
+      sourcefile: "entry.ts",
+      loader: "ts",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "neutral",
+    treeShaking: true,
+  });
+  // esbuild 遇同名会加数字后缀，剥掉再比，免得哪天多一处重名就漏判。
+  return [
+    ...outputFiles[0]!.text.matchAll(
+      /^(?:function|var|const|let|class) (\w+)/gm,
+    ),
+  ].map((match) => match[1]!.replace(/\d+$/, ""));
+};
+
+describe("打包产物", () => {
+  let algorithm: string[];
+
+  beforeAll(async () => {
+    algorithm = await declared(
+      `export { scc, settle, toposort } from "./index";`,
+    );
+  }, 30_000);
+
+  it("算法本身在产物里", () => {
+    for (const kept of ["toposort", "scc", "settle", "Stepwise"]) {
+      expect(algorithm).toContain(kept);
+    }
+  });
+
+  it.each([
+    "Graph",
+    "Journal",
+    "Signal",
+    "Hierarchy",
+    "Ordering",
+    "Snapshot",
+    "pack",
+    "diff",
+  ])("只用算法时摇掉了 %s", (symbol) => {
+    expect(algorithm).not.toContain(symbol);
+  });
+
+  /**
+   * 没有这一条，上面那组断言在「检测本身失灵」时照样全绿——产物格式换了、正则再也匹配不到
+   * 任何声明，结论就成了"什么都没漏"。所以另起一个确实用到编辑层的入口，要求它一定被抓到。
+   */
+  it("真漏进来时抓得到", async () => {
+    const editing = await declared(`export { Graph } from "./index";`);
+    for (const leaked of ["Graph", "Journal", "Signal", "Hierarchy"]) {
+      expect(editing).toContain(leaked);
+    }
+  }, 30_000);
 });

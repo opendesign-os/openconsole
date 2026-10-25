@@ -258,13 +258,13 @@ snapshot = Snapshot.of(graph, { weight: cost, reuse: snapshot });
 图维护三个版本号而不是一个：`shape`（结构）、`weights`（边权）、`costs`（点权）。每类变更
 只推进它真正波及的那些，于是作废是分开的：
 
-| 改了什么 | 重算什么 |
-| --- | --- |
-| 什么都没改 | 原样返回同一个对象 |
-| 节点参数 | 只换一个壳，CSR 与两条权重数组全部原样复用 |
-| 边权 | 只重算边权数组，走槽位直读、零哈希 |
-| 点权 | 只重算点权数组 |
-| 结构 | 全量重编译 |
+| 改了什么   | 重算什么                                   |
+| ---------- | ------------------------------------------ |
+| 什么都没改 | 原样返回同一个对象                         |
+| 节点参数   | 只换一个壳，CSR 与两条权重数组全部原样复用 |
+| 边权       | 只重算边权数组，走槽位直读、零哈希         |
+| 点权       | 只重算点权数组                             |
+| 结构       | 全量重编译                                 |
 
 **编辑器改的多半是参数而不是连线**，而参数正是节点权重——少了 `costs` 这一路，每敲一次键
 都要把全部边权重扫一遍（E=4 万就是 4 万次迭代加一次 320KB 分配）。用了谓词、折叠或合并时
@@ -408,7 +408,7 @@ await schedule(job, { budget: 8, signal, onProgress }); // 分帧推进；同步
 - **查询**：`degrees` / `sources` / `sinks` / `isolated` / `successors` / `predecessors`
 - **层级**：`roots` / `subtree` / `ancestry`（层级只存在于活图上，因此收 `Graph`）
 - **增量**：`Ordering`（Pearce-Kelly 增量拓扑序；订阅图事件，故在编辑层一侧，不在
-  `/algorithm` 子路径里）
+  `algorithm/` 目录里）
 
 遍历的起点形状统一为 `number | Iterable<number>`，省略即全图：`dfs(s)` / `dfs(s, 0)` /
 `dfs(s, [0, 3])` 在 `dfs` / `bfs` / `levels` / `postorder` / `visit` 上是同一种写法
@@ -566,7 +566,7 @@ core/
 └── serialize/            紧凑格式与结构化差异
 ```
 
-分层不是靠约定，而是由 `tests/unit/layering.test.ts` 机检——它直接读源码里的 import 语句：
+分层不是靠约定，而是由 `tests/unit/layering.test.ts` 机检。第一组断言读源码里的 import 语句：
 
 - `algorithm/**` 只依赖 `array` / `structure` / `task` / `error`，**一个文件都不 import
   `graph` / `compile` / `snapshot`**；
@@ -578,13 +578,20 @@ core/
 第四条是关键：它不是「不许有」，而是「只许有这一条」。往某个算法模块里塞一段公共代码、再从另一个
 模块 import 它，测试立刻红。同时站在两侧的只有 `snapshot` 与 `ordering`，都是显式的桥接。
 
-子路径导出据此切分：`@openconsole/graph/algorithm` 拉进 14 个模块、**零编辑层代码**，Worker 里
-只跑算法时不必打包 `Graph`、事件总线与序列化。
+对外只有一个入口：根 `index.ts` 集中导出 `core/` 的全部模块。`algorithm/index.ts` 与
+`serialize/index.ts` 只是各自那一层的目录聚合器，不单独挂到 `exports` 上——依赖方向由上面的
+机检坐实，不靠使用者挑入口。
 
 ```ts
-import { scc, settle } from "@openconsole/graph/algorithm";
-import { pack } from "@openconsole/graph/serialize";
+import { pack, scc, settle } from "@openconsole/graph";
 ```
+
+第二组断言换个手段：Worker 里只跑算法时，没被 import 的编辑层代码由 `sideEffects: false`
+交给打包器摇掉——读 import 语句验不了这件事，所以同一个测试文件真打一次包。入口只
+`export { scc, settle, toposort }`，断言产物的顶层声明里没有 `Graph` / `Journal` / `Signal` /
+`Hierarchy` / `Ordering` / `Snapshot` / `pack` / `diff`；当前产物不到 9 KB，只剩算法、`Task`
+骨架、错误类与桶队列。配套一条反向对照：换成 `export { Graph }` 的入口必须把那几个符号抓出来——
+否则「什么都没漏」可能只是检测本身失灵了。
 
 ## 设计要点
 
