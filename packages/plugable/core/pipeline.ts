@@ -274,7 +274,7 @@ export class Pipeline<T extends Step> {
     const items: T[] = new Array(snapshot.order);
     const bucket = new Float64Array(snapshot.order);
     for (let u = 0; u < snapshot.order; u++) {
-      const item = this.graph.nodeWeight(snapshot.label(u))!;
+      const item = this.graph.nodeWeight(snapshot.node(u))!;
       items[u] = item;
       bucket[u] = item.bucket;
     }
@@ -344,12 +344,12 @@ export class Pipeline<T extends Step> {
       .groups()
       .filter((members) => {
         if (members.length > 1) return true;
-        const only = snapshot.label(members[0]!);
+        const only = snapshot.node(members[0]!);
         return this.graph.adjacent(only, only);
       })
       .map((members) =>
         Array.from(members, (u) => {
-          const id = snapshot.label(u);
+          const id = snapshot.node(u);
           return this.graph.nodeWeight(id)?.name ?? String(id);
         }),
       );

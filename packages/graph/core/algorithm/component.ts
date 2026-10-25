@@ -2,8 +2,6 @@ import { bucket, seek, type Ints } from "../array";
 import { mirror, type Adjacency, type Structure } from "../structure";
 import { chain, Stepwise, transform, type Task } from "../task";
 
-const NONE = -1;
-
 /** 分量划分：`component[u]` 是节点索引 `u` 所属分量的编号。 */
 export class Partition {
   public constructor(
@@ -21,7 +19,7 @@ export class Partition {
 class Weak extends Stepwise<Partition> {
   private readonly _component: Int32Array;
   private readonly _stack: Int32Array;
-  /** 需要额外扫的反向邻接；无向结构两侧同源，留空即可。 */
+  /** 需额外扫的反向邻接；见 {@link mirror}。 */
   private readonly _inbound: Adjacency | undefined;
   private _top = 0;
   private _root = 0;
@@ -30,7 +28,7 @@ class Weak extends Stepwise<Partition> {
 
   public constructor(private readonly _structure: Structure) {
     super();
-    this._component = new Int32Array(_structure.order).fill(NONE);
+    this._component = new Int32Array(_structure.order).fill(-1);
     this._stack = new Int32Array(_structure.order);
     // 弱连通要忽略方向：缺入向就只能沿出边走，得到的是按可达性的分组而非弱连通分量
     // （`0→2, 1→2` 会报成两个分量）。
@@ -43,7 +41,7 @@ class Weak extends Stepwise<Partition> {
 
   protected step(): boolean {
     if (this._top === 0) {
-      this._root = seek(this._component, this._root, NONE);
+      this._root = seek(this._component, this._root, -1);
       if (this._root >= this._structure.order) return false;
       this._claim(this._root, this._count++);
       return true;
@@ -65,7 +63,7 @@ class Weak extends Stepwise<Partition> {
   }
 
   private _claim(u: number, label: number): void {
-    if (this._component[u] !== NONE) return;
+    if (this._component[u] !== -1) return;
     this._component[u] = label;
     this._stack[this._top++] = u;
     this._seen++;
@@ -91,7 +89,7 @@ class Strong extends Stepwise<Partition> {
   private readonly _pending: Int32Array;
   private readonly _path: Int32Array;
   private _pathTop = 0;
-  private _depth = NONE;
+  private _depth = -1;
   private _root = 0;
   private _preorder = 1;
   private _count = 0;
@@ -101,7 +99,7 @@ class Strong extends Stepwise<Partition> {
     super();
     const n = _structure.order;
     this._rindex = new Int32Array(n);
-    this._component = new Int32Array(n).fill(NONE);
+    this._component = new Int32Array(n).fill(-1);
     this._nodes = new Int32Array(n);
     this._marks = new Int32Array(n);
     this._cursors = new Int32Array(n);
@@ -114,7 +112,7 @@ class Strong extends Stepwise<Partition> {
   }
 
   protected step(): boolean {
-    if (this._depth === NONE) {
+    if (this._depth === -1) {
       this._root = seek(this._rindex, this._root, 0);
       if (this._root >= this._structure.order) return false;
       this._enter(this._root);
@@ -123,8 +121,8 @@ class Strong extends Stepwise<Partition> {
 
     const u = this._nodes[this._depth]!;
     const child = this._pending[this._depth]!;
-    if (child !== NONE) {
-      this._pending[this._depth] = NONE;
+    if (child !== -1) {
+      this._pending[this._depth] = -1;
       const low = this._rindex[child]!;
       if (low > 0 && low < this._rindex[u]!) this._rindex[u] = low;
     }
@@ -168,7 +166,7 @@ class Strong extends Stepwise<Partition> {
     this._nodes[this._depth] = u;
     this._marks[this._depth] = mark;
     this._cursors[this._depth] = this._structure.outbound.offset[u]!;
-    this._pending[this._depth] = NONE;
+    this._pending[this._depth] = -1;
     this._path[this._pathTop++] = u;
   }
 

@@ -38,6 +38,7 @@ describe("模块分层", () => {
   it.each([
     "../graph",
     "../snapshot",
+    "../compile",
     "../ordering",
     "../hierarchy",
     "../journal",
@@ -60,6 +61,16 @@ describe("模块分层", () => {
     for (const leaf of ["array.ts", "ident.ts", "slots.ts", "socket.ts"]) {
       expect(importsOf(join(CORE, leaf))).toEqual([]);
     }
+  });
+
+  /**
+   * 编译器只往一个方向认人：它认识图与契约，而 {@link Snapshot} 只认得编译结果。
+   * 反过来让编译机器散回 `snapshot.ts`，那个文件就会重新变成"一半是容器、一半是编译器"。
+   */
+  it("编译器不反向依赖增量序与层级", () => {
+    const linked = importsOf(join(CORE, "compile.ts")).sort();
+    expect(linked).not.toContain("./ordering");
+    expect(linked).not.toContain("./hierarchy");
   });
 
   it("算法之间只在真正组合时才互相依赖", () => {

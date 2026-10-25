@@ -5,8 +5,6 @@ import type { NodeId } from "./ident";
 import { Snapshot } from "./snapshot";
 import { settle } from "./task";
 
-const NONE = -1;
-
 /**
  * 增量维护的拓扑序（Pearce-Kelly）：订阅图事件就地重排，不整图重算。
  *
@@ -60,14 +58,14 @@ export class Ordering<N = unknown, E = unknown> {
   /** 节点不存在或不在跟踪范围内时返回 `undefined`。 */
   public rank(node: NodeId): number | undefined {
     const at = this.rankAt(this._graph.indexOf(node));
-    return at === NONE ? undefined : at;
+    return at === -1 ? undefined : at;
   }
 
   /** 按槽位取位次，零哈希；未跟踪返回 -1。 */
   public rankAt(slot: number): number {
-    if (slot < 0) return NONE;
+    if (slot < 0) return -1;
     const stored = this._rank[slot] ?? 0;
-    return stored === 0 ? NONE : stored - 1;
+    return stored === 0 ? -1 : stored - 1;
   }
 
   /** 可直接用作 `sort` 比较器；任一节点缺失时视为相等。 */
@@ -105,7 +103,7 @@ export class Ordering<N = unknown, E = unknown> {
       .groups()
       .filter((members) => {
         if (members.length > 1) return true;
-        const only = snapshot.label(members[0]!);
+        const only = snapshot.node(members[0]!);
         return this._graph.adjacent(only, only);
       })
       .map((members) => snapshot.names(members));

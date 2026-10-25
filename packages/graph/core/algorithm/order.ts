@@ -1,6 +1,6 @@
 import { backtrack, bucket } from "../array";
 import { Cycle } from "../error";
-import { costs, type Structure } from "../structure";
+import { weights, type Structure } from "../structure";
 import { Stepwise, transform, type Task } from "../task";
 
 export interface Topology {
@@ -12,6 +12,7 @@ export interface Topology {
 
 export interface Critical {
   readonly path: Int32Array;
+  /** 路径总长：沿途的边权与点权之和。 */
   readonly length: number;
 }
 
@@ -141,7 +142,10 @@ export const generations = (structure: Structure): Task<Int32Array[]> =>
   });
 
 /**
- * DAG 最长路。需要带权结构，否则每条边按 1 计。
+ * DAG 最长路，边权与点权都算进去：未编译边权时每条边按 1 计，未编译点权时每个节点按 0 计。
+ *
+ * @remarks 点权是编排里节点自身的执行耗时。它摊不进边权——扇入大于 1 的节点会被重复
+ *   计数——所以单独加在落点上：一条路径的长度是沿途全部节点的点权加全部边的边权。
  *
  * @throws {@link Cycle} 图中有环
  * @throws {@link Invalid} 存在 `NaN` 权边——`NaN` 比不过任何候选，放过去只会静默漏掉整段路径
@@ -149,18 +153,26 @@ export const generations = (structure: Structure): Task<Int32Array[]> =>
 export const criticalPath = (structure: Structure): Task<Critical> =>
   transform(toposort(structure), (order) => {
     const { offset, other, edge } = structure.outbound;
-    const weight = costs(structure);
+    const weight = weights(structure);
+    const cost = structure.cost;
     const dist = new Float64Array(structure.order);
+    // 单点路径的长度就是该节点自己的点权；松弛时再加上落点的点权。
+    if (cost !== undefined) {
+      for (let u = 0; u < structure.order; u++) dist[u] = cost[u]!;
+    }
     const prev = new Int32Array(structure.order).fill(-1);
     let end = order.length > 0 ? order[0]! : -1;
 
     for (let i = 0; i < order.length; i++) {
       const u = order[i]!;
       if (dist[u]! > dist[end]!) end = u;
+      const base = dist[u]!;
       for (let k = offset[u]!; k < offset[u + 1]!; k++) {
         const v = other[k]!;
         const candidate =
-          dist[u]! + (weight === undefined ? 1 : weight[edge[k]!]!);
+          base +
+          (weight === undefined ? 1 : weight[edge[k]!]!) +
+          (cost === undefined ? 0 : cost[v]!);
         if (candidate > dist[v]!) {
           dist[v] = candidate;
           prev[v] = u;

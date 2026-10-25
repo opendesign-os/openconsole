@@ -138,8 +138,8 @@ describe("编辑 → 增量顺序 → 编译 → 算法", () => {
     const graph = pipeline();
     const folded = Snapshot.of(graph, { collapse: [nodeId("prep")] });
 
-    expect(folded.labels).not.toContain(nodeId("parse"));
-    expect(folded.labels).toContain(nodeId("prep"));
+    expect(folded.nodes).not.toContain(nodeId("parse"));
+    expect(folded.nodes).toContain(nodeId("prep"));
     expect(settle(toposort(folded))).toHaveLength(folded.order);
   });
 });

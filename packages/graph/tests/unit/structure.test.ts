@@ -8,6 +8,7 @@ import {
   Invalid,
   isolated,
   kruskal,
+  merged,
   Oneway,
   predecessors,
   prim,
@@ -19,11 +20,12 @@ import {
   sinks,
   Snapshot,
   sources,
+  subset,
   successors,
   toposort,
   type Structure,
 } from "../../index";
-import { randomGraph, wedge, weighted } from "../support";
+import { cost, randomGraph, wedge, weighted } from "../support";
 
 /** 一条 0 → 1 → 2 的链，手写而成，完全不经过 `Graph`。 */
 const handmade: Structure = {
@@ -40,6 +42,7 @@ const handmade: Structure = {
     edge: Int32Array.of(0, 1),
   },
   weight: Float64Array.of(3, 4),
+  cost: undefined,
 };
 
 describe("Structure 是算法的唯一契约", () => {
@@ -73,6 +76,7 @@ describe("Structure 是算法的唯一契约", () => {
       outbound: snapshot.outbound,
       inbound: snapshot.inbound,
       weight: snapshot.weight,
+      cost: snapshot.cost,
     };
 
     expect(settle(scc(plain)).count).toBe(settle(scc(snapshot)).count);
@@ -117,6 +121,61 @@ describe("Structure 是算法的唯一契约", () => {
     expect([...settle(shortestPaths(snapshot, 0)).distance]).toEqual([
       ...byCost,
     ]);
+  });
+});
+
+describe("子集视图", () => {
+  it("只保留给定节点与两端都在其中的边", () => {
+    // 0 → 1 → 2，取 {0, 1}：跨出去的 1 → 2 被丢掉。
+    const inside = subset(handmade, Int32Array.of(0, 1));
+    expect(inside.order).toBe(2);
+    expect(inside.size).toBe(1);
+    expect([...successors(inside, 0)]).toEqual([1]);
+    expect([...successors(inside, 1)]).toEqual([]);
+    // 边权跟着新序号走，并留一条回原序号的映射。
+    expect([...inside.edges]).toEqual([0]);
+    expect(inside.weight![0]).toBe(3);
+  });
+
+  it("产出就是普通 Structure，全套算法照常跑", () => {
+    const graph = randomGraph(96, { order: 40, density: 3, acyclic: true });
+    const snapshot = weighted(graph);
+    // 子集索引 i 对应原索引 keep[i]——调用方本来就握着这张表，视图不必再给一份。
+    const keep = Int32Array.from(
+      Array.from({ length: snapshot.order }, (_value, u) => u).filter(
+        (u) => u % 2 === 0,
+      ),
+    );
+
+    const inside = subset(snapshot, keep);
+    expect(inside.order).toBe(keep.length);
+    expect(settle(toposort(inside)).length).toBe(inside.order);
+
+    // 子集里的每条边，在原图上也必须存在，且两端都被保留。
+    const { offset, other } = inside.outbound;
+    for (let u = 0; u < inside.order; u++) {
+      for (let k = offset[u]!; k < offset[u + 1]!; k++) {
+        expect([...successors(snapshot, keep[u]!)]).toContain(
+          keep[other[k]!]!,
+        );
+      }
+    }
+  });
+
+  it("点权与边权都按新序号重排", () => {
+    const priced: Structure = { ...handmade, cost: Float64Array.of(7, 8, 9) };
+    const inside = subset(priced, Int32Array.of(2, 0));
+    expect([...inside.cost!]).toEqual([9, 7]);
+  });
+
+  it("无向结构里一条边只收一次", () => {
+    const graph = randomGraph(97, { order: 20, density: 2 });
+    const both = Snapshot.of(graph, { undirected: true, weight: cost });
+    const keep = Int32Array.from({ length: both.order }, (_value, u) => u);
+
+    const inside = subset(both, keep);
+    expect(inside.size).toBe(both.size);
+    expect(merged(inside)).toBe(true);
   });
 });
 

@@ -65,12 +65,6 @@ export class Slots<K> {
     return this._index.keys();
   }
 
-  public clear(): void {
-    this._index.clear();
-    this._keys.length = 0;
-    this._free.length = 0;
-  }
-
   /**
    * 消除空位并重新稠密编号。
    *
@@ -94,10 +88,53 @@ export class Slots<K> {
 }
 
 /** 按 {@link Slots.compact} 的映射原地压缩平行数组。 */
-export function gather<T>(list: T[], remap: Int32Array, length: number): void {
-  for (let i = 0; i < remap.length; i++) {
-    const to = remap[i]!;
+export function gather<T>(list: T[], remapping: Int32Array, length: number): void {
+  for (let i = 0; i < remapping.length; i++) {
+    const to = remapping[i]!;
     if (to >= 0) list[to] = list[i]!;
   }
   list.length = length;
+}
+
+/** 按 {@link Slots.compact} 的映射改写列表里的槽位值；次序不动，因此位置索引仍然有效。 */
+export function remap(list: number[], remapping: Int32Array): void {
+  for (let i = 0; i < list.length; i++) list[i] = remapping[list[i]!]!;
+}
+
+/**
+ * 按位置索引从无序列表里摘掉一项，O(1)：末尾那项补位，并改写补位者的位置索引。
+ *
+ * @remarks 边的两条邻接表与分组的子表共用这一个原语。换成在列表上 `indexOf` 就是
+ *   O(size)，清空一个高扇出节点的连线、解散一个大分组都会整体退化成平方。
+ */
+export function unhook(list: number[], place: number[], item: number): void {
+  const at = place[item]!;
+  const last = list.length - 1;
+  if (at !== last) {
+    const moved = list[last]!;
+    list[at] = moved;
+    place[moved] = at;
+  }
+  list.pop();
+}
+
+/**
+ * 名字 → 序号，按首次出现顺序编号。
+ *
+ * @remarks {@link Slots} 的只进不出版：没有删除也就没有空位，序号恒等于
+ *   {@link Interner.table} 的下标，于是表本身就是反查，不必再留一条键数组。
+ *   快照的端口层与序列化的短 id 都是这一件事。
+ */
+export class Interner {
+  public readonly table: string[] = [];
+  private readonly _seen = new Map<string, number>();
+
+  public of(name: string): number {
+    const known = this._seen.get(name);
+    if (known !== undefined) return known;
+    const id = this.table.length;
+    this._seen.set(name, id);
+    this.table.push(name);
+    return id;
+  }
 }

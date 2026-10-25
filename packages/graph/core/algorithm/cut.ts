@@ -7,8 +7,6 @@ import {
 } from "../structure";
 import { Stepwise, type Task } from "../task";
 
-const NONE = -1;
-
 /** 桥的两端节点索引。 */
 export interface Bridge {
   readonly from: number;
@@ -35,10 +33,10 @@ class Cut extends Stepwise<Cuts> {
   private readonly _cursors: Int32Array;
   private readonly _children: Int32Array;
   private readonly _pending: Int32Array;
-  /** 无向视角要额外扫的反向邻接；无向编译时两侧同源，留空即可。 */
+  /** 需额外扫的反向邻接；见 {@link mirror}。 */
   private readonly _inbound: Adjacency | undefined;
   private readonly _bridges: Bridge[] = [];
-  private _depth = NONE;
+  private _depth = -1;
   private _root = 0;
   private _clock = 0;
   private _other = 0;
@@ -48,7 +46,7 @@ class Cut extends Stepwise<Cuts> {
     super();
     this._inbound = mirror(_structure, "cuts");
     const n = _structure.order;
-    this._discovered = new Int32Array(n).fill(NONE);
+    this._discovered = new Int32Array(n).fill(-1);
     this._low = new Int32Array(n);
     this._cut = new Uint8Array(n);
     this._nodes = new Int32Array(n);
@@ -63,23 +61,23 @@ class Cut extends Stepwise<Cuts> {
   }
 
   protected step(): boolean {
-    if (this._depth === NONE) {
-      this._root = seek(this._discovered, this._root, NONE);
+    if (this._depth === -1) {
+      this._root = seek(this._discovered, this._root, -1);
       if (this._root >= this._structure.order) return false;
-      this._enter(this._root, NONE);
+      this._enter(this._root, -1);
       return true;
     }
 
     const u = this._nodes[this._depth]!;
     const child = this._pending[this._depth]!;
-    if (child !== NONE) {
-      this._pending[this._depth] = NONE;
+    if (child !== -1) {
+      this._pending[this._depth] = -1;
       if (this._low[child]! < this._low[u]!) this._low[u] = this._low[child]!;
       if (this._low[child]! > this._discovered[u]!) {
         this._bridges.push({ from: u, to: child });
       }
       if (
-        this._via[this._depth] !== NONE &&
+        this._via[this._depth] !== -1 &&
         this._low[child]! >= this._discovered[u]!
       ) {
         this._cut[u] = 1;
@@ -90,7 +88,7 @@ class Cut extends Stepwise<Cuts> {
       this._cursors[this._depth] = this._cursors[this._depth]! + 1;
       // 不沿来路返回，但平行边（另一个边序号）仍算作返祖边。
       if (this._edge === this._via[this._depth] || this._other === u) continue;
-      if (this._discovered[this._other] === NONE) {
+      if (this._discovered[this._other] === -1) {
         this._children[this._depth] = this._children[this._depth]! + 1;
         this._pending[this._depth] = this._other;
         this._enter(this._other, this._edge);
@@ -101,7 +99,7 @@ class Cut extends Stepwise<Cuts> {
       }
     }
 
-    if (this._via[this._depth] === NONE && this._children[this._depth]! >= 2) {
+    if (this._via[this._depth] === -1 && this._children[this._depth]! >= 2) {
       this._cut[u] = 1;
     }
     this._depth--;
@@ -136,7 +134,7 @@ class Cut extends Stepwise<Cuts> {
     this._via[this._depth] = via;
     this._cursors[this._depth] = 0;
     this._children[this._depth] = 0;
-    this._pending[this._depth] = NONE;
+    this._pending[this._depth] = -1;
   }
 
   public result(): Cuts {
@@ -190,15 +188,15 @@ class Dominators extends Stepwise<Int32Array> {
     // 半支配点是靠前驱求的：缺入向会让每个节点的 idom 退化成它的 DFS 父节点。
     this._inbound = inboundOf(_structure, "dominators");
     const n = _structure.order;
-    this._order = new Int32Array(n).fill(NONE);
-    this._number = new Int32Array(n).fill(NONE);
-    this._parent = new Int32Array(n).fill(NONE);
+    this._order = new Int32Array(n).fill(-1);
+    this._number = new Int32Array(n).fill(-1);
+    this._parent = new Int32Array(n).fill(-1);
     this._semi = new Int32Array(n);
-    this._ancestor = new Int32Array(n).fill(NONE);
+    this._ancestor = new Int32Array(n).fill(-1);
     this._label = new Int32Array(n);
-    this._bucketHead = new Int32Array(n).fill(NONE);
-    this._bucketNext = new Int32Array(n).fill(NONE);
-    this._idom = new Int32Array(n).fill(NONE);
+    this._bucketHead = new Int32Array(n).fill(-1);
+    this._bucketNext = new Int32Array(n).fill(-1);
+    this._idom = new Int32Array(n).fill(-1);
     this._stack = new Int32Array(n);
     this._cursors = new Int32Array(n);
     this._path = new Int32Array(n);
@@ -269,7 +267,7 @@ class Dominators extends Stepwise<Int32Array> {
     const k = this._cursors[top]!;
     this._cursors[top] = k + 1;
     const v = other[k]!;
-    if (this._number[v] === NONE) {
+    if (this._number[v] === -1) {
       const index = this._counted++;
       this._number[v] = index;
       this._order[index] = v;
@@ -294,7 +292,7 @@ class Dominators extends Stepwise<Int32Array> {
     const back = this._inbound;
     for (let k = back.offset[node]!; k < back.offset[node + 1]!; k++) {
       const number = this._number[back.other[k]!]!;
-      if (number === NONE) continue;
+      if (number === -1) continue;
       const candidate = this._evaluate(number);
       if (this._semi[candidate]! < this._semi[w]!) {
         this._semi[w] = this._semi[candidate]!;
@@ -307,15 +305,15 @@ class Dominators extends Stepwise<Int32Array> {
     this._ancestor[w] = this._parent[w]!;
 
     const parent = this._parent[w]!;
-    for (let v = this._bucketHead[parent]!; v !== NONE; ) {
+    for (let v = this._bucketHead[parent]!; v !== -1; ) {
       const next = this._bucketNext[v]!;
-      this._bucketNext[v] = NONE;
+      this._bucketNext[v] = -1;
       const candidate = this._evaluate(v);
       this._idom[v] =
         this._semi[candidate]! < this._semi[v]! ? candidate : parent;
       v = next;
     }
-    this._bucketHead[parent] = NONE;
+    this._bucketHead[parent] = -1;
     return true;
   }
 
@@ -333,7 +331,7 @@ class Dominators extends Stepwise<Int32Array> {
   }
 
   private _evaluate(v: number): number {
-    if (this._ancestor[v] === NONE) return v;
+    if (this._ancestor[v] === -1) return v;
     this._compress(v);
     return this._label[v]!;
   }
@@ -341,7 +339,7 @@ class Dominators extends Stepwise<Int32Array> {
   private _compress(v: number): void {
     let depth = 0;
     let cursor = v;
-    while (this._ancestor[this._ancestor[cursor]!] !== NONE) {
+    while (this._ancestor[this._ancestor[cursor]!] !== -1) {
       this._path[depth++] = cursor;
       cursor = this._ancestor[cursor]!;
     }
@@ -358,7 +356,7 @@ class Dominators extends Stepwise<Int32Array> {
   /** `idom[u]` 是节点索引 `u` 的直接支配点；入口指向自身，不可达为 -1。 */
   public result(): Int32Array {
     this.ensure();
-    const tree = new Int32Array(this._structure.order).fill(NONE);
+    const tree = new Int32Array(this._structure.order).fill(-1);
     if (this._counted === 0) return tree;
     const root = this._order[0]!;
     tree[root] = root;

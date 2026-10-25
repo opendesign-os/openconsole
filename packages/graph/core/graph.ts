@@ -4,10 +4,9 @@ import { Capacity, Duplicate, Mismatch, Missing, Nested } from "./error";
 import type { Events } from "./event";
 import { edgeId, type EdgeId, type GraphId, type NodeId } from "./ident";
 import { Journal } from "./journal";
-import { gather, Slots } from "./slots";
+import { Hierarchy } from "./hierarchy";
+import { gather, remap, Slots, unhook } from "./slots";
 import type { Ports } from "./vertex";
-
-const NONE = -1;
 
 /**
  * 私有查询的方向参数。
@@ -17,6 +16,10 @@ const NONE = -1;
  */
 const OUT = true;
 const IN = false;
+
+/** `_reserve` 逐字符解析自动编号用；`"e"` 与 `"0"` 的码点。 */
+const CHAR_E = 101;
+const CHAR_ZERO = 48;
 
 /** 加入图所需的节点描述。{@link Vertex} 与 {@link NodeRecord} 都满足它，故可直接互相搬运。 */
 export interface NodeSpec<W = unknown> {
@@ -33,12 +36,21 @@ export interface NodeRecord<W = unknown> {
   readonly outputs: Ports;
 }
 
-export interface EdgeRecord<W = unknown> {
+/**
+ * 一条边的接线：两端与两端引脚，不含权重。
+ *
+ * @remarks 单独立一个类型是为了让"只依赖结构"在类型上成立——快照的标注层收的是它，
+ *   因此层的取值不可能随权重变动，改权重时能整份复用。见 {@link CompileOptions.layer}。
+ */
+export interface Wire {
   readonly id: EdgeId;
   readonly source: NodeId;
   readonly target: NodeId;
   readonly sourcePort: string;
   readonly targetPort: string;
+}
+
+export interface EdgeRecord<W = unknown> extends Wire {
   readonly weight: W | undefined;
 }
 
@@ -75,8 +87,8 @@ export class Graph<N = unknown, E = unknown> {
   private readonly _outputs: Ports[] = [];
   private readonly _out: number[][] = [];
   private readonly _in: number[][] = [];
-  private readonly _parent: number[] = [];
-  private readonly _children: Array<number[] | undefined> = [];
+  /** 父子关系整块交给它；与邻接完全正交，见 {@link Hierarchy}。 */
+  private readonly _tree = new Hierarchy();
 
   private readonly _edges = new Slots<EdgeId>();
   private readonly _from: number[] = [];
@@ -87,14 +99,12 @@ export class Graph<N = unknown, E = unknown> {
   /** 边在两端邻接表里的下标，摘链时同步维护，见 {@link unhook}。 */
   private readonly _outAt: number[] = [];
   private readonly _inAt: number[] = [];
-  /** 节点在父节点子表里的下标，语义同 {@link Graph._outAt}。 */
-  private readonly _childAt: number[] = [];
 
   private _sequence = 0;
 
   public constructor(public readonly id: GraphId) {}
 
-  /** 变更事件总线。载荷在事务边界统一派发，错误彼此隔离；细节见 {@link Journal}。 */
+  /** 变更事件总线。载荷在事务边界统一派发（见 {@link Graph.batch}），订阅者之间错误隔离。 */
   public get signal(): Signal<Events<N, E>> {
     return this._journal.signal;
   }
@@ -110,6 +120,16 @@ export class Graph<N = unknown, E = unknown> {
    */
   public get shape(): number {
     return this._journal.shape;
+  }
+
+  /** 边权可能变了。{@link Snapshot.of} 据此决定能否原样复用上一份快照的边权数组。 */
+  public get weights(): number {
+    return this._journal.weights;
+  }
+
+  /** 点权可能变了，语义同 {@link Graph.weights}。 */
+  public get costs(): number {
+    return this._journal.costs;
   }
 
   public get order(): number {
@@ -170,10 +190,8 @@ export class Graph<N = unknown, E = unknown> {
     this._outputs[u] = { ...spec.outputs };
     this._out[u] = [];
     this._in[u] = [];
-    this._parent[u] = NONE;
-    this._children[u] = undefined;
-    this._childAt[u] = NONE;
-    if (this._journal.mark("nodeAdded", true)) {
+    this._tree.open(u);
+    if (this._journal.mark("nodeAdded", "shape")) {
       this._journal.push("nodeAdded", { node: spec.id, slot: u });
     }
     this._journal.commit();
@@ -218,22 +236,16 @@ export class Graph<N = unknown, E = unknown> {
       for (const e of this._in[u]!) doomed.add(e);
       for (const e of doomed) this._sever(e);
 
-      // 先摘掉子表：整表随节点一起丢弃，`_detach` 因此不会在**正被迭代的数组**上做
-      // swap-pop——那样会把补位到已访问下标的子节点整个漏掉。
-      const grand = this._parent[u]!;
-      const children = this._children[u];
-      this._children[u] = undefined;
-      if (children) {
-        for (const child of children) this._reparent(child, grand);
-      }
-      this._detach(u);
+      const grand = this._tree.parent(u);
+      for (const child of this._tree.orphan(u)) this._reparent(child, grand);
+      this._tree.detach(u);
 
       const weight = this._weight[u];
       this._weight[u] = undefined;
       this._inputs[u] = {};
       this._outputs[u] = {};
       this._nodes.remove(node);
-      if (this._journal.mark("nodeDropped", true)) {
+      if (this._journal.mark("nodeDropped", "shape")) {
         this._journal.push("nodeDropped", { node, slot: u, weight });
       }
     });
@@ -296,7 +308,7 @@ export class Graph<N = unknown, E = unknown> {
 
     this.batch(() => {
       for (const e of stale) this._sever(e);
-      if (this._journal.mark("nodeReshaped", true)) {
+      if (this._journal.mark("nodeReshaped", "shape")) {
         this._journal.push("nodeReshaped", { node, slot: u, inputs, outputs });
       }
     });
@@ -307,6 +319,11 @@ export class Graph<N = unknown, E = unknown> {
   public nodeWeight(node: NodeId): N | undefined {
     const u = this._nodes.indexOf(node);
     return u < 0 ? undefined : this._weight[u];
+  }
+
+  /** 按槽位读节点权重，跳过 id 查表；语义同 {@link Graph.edgeWeightAt}。 */
+  public nodeWeightAt(slot: number): N | undefined {
+    return this._weight[slot];
   }
 
   /** @throws {@link Missing} 节点不存在 */
@@ -324,7 +341,7 @@ export class Graph<N = unknown, E = unknown> {
     const before = this._weight[u];
     const after = update(before);
     this._weight[u] = after;
-    if (this._journal.mark("nodeUpdated", false)) {
+    if (this._journal.mark("nodeUpdated", "cost")) {
       this._journal.push("nodeUpdated", { node, slot: u, before, after });
     }
     this._journal.commit();
@@ -390,7 +407,7 @@ export class Graph<N = unknown, E = unknown> {
     this._edgeWeight[e] = options.weight;
     this._outAt[e] = this._out[u]!.push(e) - 1;
     this._inAt[e] = this._in[v]!.push(e) - 1;
-    if (this._journal.mark("edgeAdded", true)) {
+    if (this._journal.mark("edgeAdded", "shape")) {
       this._journal.push("edgeAdded", {
         edge: id,
         slot: e,
@@ -435,21 +452,6 @@ export class Graph<N = unknown, E = unknown> {
     return this._edgeWeight[slot];
   }
 
-  /**
-   * 按槽位读边两端的端口名，跳过 id 查表，也不物化一条 {@link EdgeRecord}。
-   *
-   * @remarks 快照编译端口层走这条路：整份端口标签是一遍纯下标扫描，而
-   *   {@link Graph.edgeAt} 会为每条边分配一个记录再丢掉。
-   */
-  public sourcePortAt(slot: number): string | undefined {
-    return this._fromPort[slot];
-  }
-
-  /** 边槽位 → 目标端口名，语义同 {@link Graph.sourcePortAt}。 */
-  public targetPortAt(slot: number): string | undefined {
-    return this._toPort[slot];
-  }
-
   /** @throws {@link Missing} 边不存在 */
   public setEdgeWeight(edge: EdgeId, weight: E | undefined): this {
     return this.updateEdge(edge, () => weight);
@@ -465,7 +467,7 @@ export class Graph<N = unknown, E = unknown> {
     const before = this._edgeWeight[e];
     const after = update(before);
     this._edgeWeight[e] = after;
-    if (this._journal.mark("edgeUpdated", false)) {
+    if (this._journal.mark("edgeUpdated", "weight")) {
       this._journal.push("edgeUpdated", { edge, slot: e, before, after });
     }
     this._journal.commit();
@@ -561,8 +563,8 @@ export class Graph<N = unknown, E = unknown> {
     for (let u = 0; u < this._nodes.bound; u++) {
       const id = this._nodes.at(u);
       if (id === undefined) continue;
-      const p = this._parent[u]!;
-      if (p !== NONE) visit(id, this._nodes.key(p));
+      const p = this._tree.parent(u);
+      if (p !== -1) visit(id, this._nodes.key(p));
     }
   }
 
@@ -652,9 +654,7 @@ export class Graph<N = unknown, E = unknown> {
     if (u < 0) throw new Missing("node", node, "setParent child");
     const p = this._nodes.indexOf(parent);
     if (p < 0) throw new Missing("node", parent, "setParent parent");
-    for (let cursor = p; cursor !== NONE; cursor = this._parent[cursor]!) {
-      if (cursor === u) throw new Nested(node, parent);
-    }
+    if (this._tree.above(u, p)) throw new Nested(node, parent);
     this._reparent(u, p);
     this._journal.commit();
     return this;
@@ -663,7 +663,7 @@ export class Graph<N = unknown, E = unknown> {
   public unparent(node: NodeId): this {
     const u = this._nodes.indexOf(node);
     if (u >= 0) {
-      this._reparent(u, NONE);
+      this._reparent(u, -1);
       this._journal.commit();
     }
     return this;
@@ -672,20 +672,19 @@ export class Graph<N = unknown, E = unknown> {
   public parent(node: NodeId): NodeId | undefined {
     const u = this._nodes.indexOf(node);
     if (u < 0) return undefined;
-    const p = this._parent[u]!;
-    return p === NONE ? undefined : this._nodes.at(p);
+    const p = this._tree.parent(u);
+    return p === -1 ? undefined : this._nodes.at(p);
   }
 
   /** 按槽位取父节点槽位；无父或空位返回 -1。 */
   public parentAt(slot: number): number {
-    const p = this._parent[slot];
-    return p === undefined ? NONE : p;
+    return this._tree.parent(slot);
   }
 
   public children(node: NodeId): NodeId[] {
     const u = this._nodes.indexOf(node);
     if (u < 0) return [];
-    return (this._children[u] ?? []).map((child) => this._nodes.key(child));
+    return this._tree.children(u).map((child) => this._nodes.key(child));
   }
 
   /**
@@ -735,9 +734,6 @@ export class Graph<N = unknown, E = unknown> {
     gather(this._outputs, nodes, order);
     gather(this._out, nodes, order);
     gather(this._in, nodes, order);
-    gather(this._parent, nodes, order);
-    gather(this._children, nodes, order);
-    gather(this._childAt, nodes, order);
     gather(this._from, edges, size);
     gather(this._to, edges, size);
     gather(this._fromPort, edges, size);
@@ -754,12 +750,9 @@ export class Graph<N = unknown, E = unknown> {
     for (let u = 0; u < order; u++) {
       remap(this._out[u]!, edges);
       remap(this._in[u]!, edges);
-      const parent = this._parent[u]!;
-      this._parent[u] = parent === NONE ? NONE : nodes[parent]!;
-      const children = this._children[u];
-      if (children) remap(children, nodes);
     }
-    if (this._journal.mark("compacted", true)) {
+    this._tree.compact(nodes, order);
+    if (this._journal.mark("compacted", "shape")) {
       this._journal.push("compacted", { nodes, edges });
     }
     this._journal.commit();
@@ -841,7 +834,7 @@ export class Graph<N = unknown, E = unknown> {
 
     const edge = this._edges.key(e);
     // 载荷要在释放之前取：`_mark` 之后端点与权重就该视作已失效。
-    const payload = this._journal.mark("edgeDropped", true)
+    const payload = this._journal.mark("edgeDropped", "shape")
       ? {
           edge,
           slot: e,
@@ -973,29 +966,17 @@ export class Graph<N = unknown, E = unknown> {
   }
 
   private _reparent(u: number, parent: number): void {
-    const before = this._parent[u]!;
+    const before = this._tree.parent(u);
     if (before === parent) return;
-    this._detach(u);
-    this._parent[u] = parent;
-    if (parent !== NONE) {
-      this._childAt[u] = (this._children[parent] ??= []).push(u) - 1;
-    }
-    if (this._journal.mark("parentChanged", true)) {
+    this._tree.attach(u, parent);
+    if (this._journal.mark("parentChanged", "shape")) {
       this._journal.push("parentChanged", {
         node: this._nodes.key(u),
         slot: u,
-        before: before === NONE ? undefined : this._nodes.at(before),
-        after: parent === NONE ? undefined : this._nodes.at(parent),
+        before: before === -1 ? undefined : this._nodes.at(before),
+        after: parent === -1 ? undefined : this._nodes.at(parent),
       });
     }
-  }
-
-  private _detach(u: number): void {
-    const parent = this._parent[u]!;
-    this._parent[u] = NONE;
-    if (parent === NONE) return;
-    const siblings = this._children[parent];
-    if (siblings) unhook(siblings, this._childAt, u);
   }
 
   private _mint(): EdgeId {
@@ -1011,33 +992,18 @@ export class Graph<N = unknown, E = unknown> {
    *
    * 拷贝、反序列化、撤销重做都会带着原有的 `e<n>` 建边；不在这里推进游标，
    * 下一次自动分配就得从 `e0` 起把它们逐个撞过去——一次 O(E) 的空转。
+   *
+   * @remarks 逐字符扫而不是 `Number(id.slice(1))`：后者为每条边切一个临时字符串再解析，
+   *   而这条路径正是批量建图（反序列化、拷贝、撤销重做）每条边都要走的。
    */
   private _reserve(id: EdgeId): void {
-    if (!id.startsWith("e")) return;
-    const seen = Number(id.slice(1));
-    if (Number.isInteger(seen) && seen >= this._sequence) {
-      this._sequence = seen + 1;
+    if (id.charCodeAt(0) !== CHAR_E || id.length < 2) return;
+    let seen = 0;
+    for (let i = 1; i < id.length; i++) {
+      const digit = id.charCodeAt(i) - CHAR_ZERO;
+      if (digit < 0 || digit > 9) return;
+      seen = seen * 10 + digit;
     }
+    if (seen >= this._sequence) this._sequence = seen + 1;
   }
-}
-
-/**
- * 按位置索引从无序列表里摘掉一项，O(1)：末尾那项补位，并改写补位者的位置索引。
- *
- * @remarks 边的两条邻接表与分组的子表共用这一个原语。换成在列表上 `indexOf` 就是
- *   O(size)，清空一个高扇出节点的连线会整体退化成平方。
- */
-function unhook(list: number[], place: number[], item: number): void {
-  const at = place[item]!;
-  const last = list.length - 1;
-  if (at !== last) {
-    const moved = list[last]!;
-    list[at] = moved;
-    place[moved] = at;
-  }
-  list.pop();
-}
-
-function remap(list: number[], mapping: Int32Array): void {
-  for (let i = 0; i < list.length; i++) list[i] = mapping[list[i]!]!;
 }

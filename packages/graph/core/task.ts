@@ -3,40 +3,37 @@ import { Incomplete, Interrupted } from "./error";
 /**
  * 可分步推进的运算。全部中间状态都在实例上，因此随时可停、可续：
  * 中断只是停止调用 {@link Task.advance}，再调一次就从原处接着跑。
+ *
+ * @remarks 契约是接口而不是抽象类——它一个成员都不带实现，而凑得出这四样的不止一种东西：
+ *   {@link ready} 的常量任务与 {@link chain} 串起来的两段都不走单步推进。要骨架就继承
+ *   {@link Stepwise}，`settle` / `run` / `schedule` 只认这个接口。
  */
-export abstract class Task<T> {
+export interface Task<T> {
   /** 推进至多 `budget` 个基本步；返回 `false` 表示已跑完。 */
-  public abstract advance(budget: number): boolean;
+  advance(budget: number): boolean;
 
   /** 是否已跑完。 */
-  public abstract get settled(): boolean;
+  readonly settled: boolean;
 
   /** 完成度 0..1，粒度取决于算法。 */
-  public abstract get progress(): number;
+  readonly progress: number;
 
   /**
    * 取结果。
    *
    * @throws {@link Incomplete} 任务尚未跑完——中间态一律不对外，避免把未收敛的值当答案用
    */
-  public abstract result(): T;
+  result(): T;
 }
 
 /**
- * 只需实现单步推进的任务骨架，预算记账与进度归一由基类负责。
+ * {@link Stepwise} 与 {@link Future} 共享的推进状态：完成标记、进度归一、结果闸门。
  *
- * @remarks 构造函数里只做 O(V) 级的状态分配。与算法同阶的准备工作（排序、建堆、扫全部边）
- *   一律摆进 {@link Stepwise.step}，否则那部分既不受预算约束也中断不了。
+ * @remarks 两者只在"一步是同步还是异步"上分家，其余语义逐条一致，因此差异只压在各自的
+ *   `advance` 里，共有的那份状态收在这里——两边各存一个 `settled` 迟早会跑偏。
  */
-export abstract class Stepwise<T> extends Task<T> {
+abstract class Progress<T> {
   #settled = false;
-
-  public advance(budget: number): boolean {
-    for (let i = 0; i < budget && !this.#settled; i++) {
-      if (!this.step()) this.#settled = true;
-    }
-    return !this.#settled;
-  }
 
   public get settled(): boolean {
     return this.#settled;
@@ -45,63 +42,10 @@ export abstract class Stepwise<T> extends Task<T> {
   /**
    * 完成度 0..1；跑完即为 1。
    *
-   * @remarks 归一收在这里而不是交给各算法：{@link Stepwise.measure} 的估算多半是
+   * @remarks 归一收在这里而不是交给各算法：{@link Progress.measure} 的估算多半是
    *   "已处理节点数 / 总数"，而提前终止（摸到终点、提前收敛、图不连通）时那个比值到不了
    *   分母——非连通图上的 Dijkstra 停在 0.5，进度条就永远差一口。
    */
-  public get progress(): number {
-    return this.#settled ? 1 : this.measure();
-  }
-
-  /** 未跑完时的完成度估算，0..1；单调不减。 */
-  protected abstract measure(): number;
-
-  /**
-   * {@link Stepwise.measure} 的惯用分式：`total` 为 0 时算作已完成。
-   *
-   * @remarks 空图、空分量、无边——这些边界在每个算法里都要挡一次，漏挡就是 `0/0` 得到
-   *   `NaN`，进度条与 `onProgress` 拿到的都是它。收在这里比各算法各写一遍三元表达式可靠。
-   */
-  protected ratio(done: number, total: number): number {
-    return total === 0 ? 1 : done / total;
-  }
-
-  /** 供 `result()` 开头调用。@throws {@link Incomplete} 尚未跑完 */
-  protected ensure(): void {
-    if (!this.#settled) throw new Incomplete(this.progress);
-  }
-
-  /** 推进一个基本单位；返回 `false` 表示全部工作已完成。 */
-  protected abstract step(): boolean;
-}
-
-/**
- * 每一步可以 await 的运算——{@link Task} 的异步孪生，其余语义完全一致：中间状态都在实例上，
- * 因此随时可停、可续、可做检查点。
- *
- * @remarks 单独立一个基类而不是放宽 {@link Task.advance} 的返回值。后者看着更省，实则会
- *   在每个同步驱动点埋雷：`while (task.advance(Infinity));` 遇到 Promise 是恒真，
- *   直接变成死循环，而类型上毫无异样。两套各自内部一致，比一个半吊子的联合类型可靠。
- *
- *   契约与骨架合在一处（不像 `Task` / {@link Stepwise} 分两层），因为异步侧目前没有
- *   {@link ready} / {@link chain} 那样不走单步推进的实现。真需要时再拆。
- */
-export abstract class Future<T> {
-  #settled = false;
-
-  /** 推进至多 `budget` 个基本步；返回 `false` 表示已跑完。 */
-  public async advance(budget: number): Promise<boolean> {
-    for (let i = 0; i < budget && !this.#settled; i++) {
-      if (!(await this.step())) this.#settled = true;
-    }
-    return !this.#settled;
-  }
-
-  public get settled(): boolean {
-    return this.#settled;
-  }
-
-  /** 完成度 0..1；跑完即为 1。归一理由见 {@link Stepwise.progress}。 */
   public get progress(): number {
     return this.#settled ? 1 : this.measure();
   }
@@ -116,10 +60,12 @@ export abstract class Future<T> {
   /** 未跑完时的完成度估算，0..1；单调不减。 */
   protected abstract measure(): number;
 
-  /** 推进一个基本单位；返回 `false` 表示全部工作已完成。 */
-  protected abstract step(): Promise<boolean>;
-
-  /** 见 {@link Stepwise.ratio}。 */
+  /**
+   * {@link Progress.measure} 的惯用分式：`total` 为 0 时算作已完成。
+   *
+   * @remarks 空图、空分量、无边——这些边界在每个算法里都要挡一次，漏挡就是 `0/0` 得到
+   *   `NaN`，进度条与 `onProgress` 拿到的都是它。收在这里比各算法各写一遍三元表达式可靠。
+   */
   protected ratio(done: number, total: number): number {
     return total === 0 ? 1 : done / total;
   }
@@ -128,6 +74,53 @@ export abstract class Future<T> {
   protected ensure(): void {
     if (!this.#settled) throw new Incomplete(this.progress);
   }
+
+  /** 单步推进答"没活了"时，由 `advance` 调一次。 */
+  protected finish(): void {
+    this.#settled = true;
+  }
+}
+
+/**
+ * 只需实现单步推进的任务骨架，预算记账与进度归一由基类负责。
+ *
+ * @remarks 构造函数里只做 O(V) 级的状态分配。与算法同阶的准备工作（排序、建堆、扫全部边）
+ *   一律摆进 {@link Stepwise.step}，否则那部分既不受预算约束也中断不了。
+ */
+export abstract class Stepwise<T> extends Progress<T> implements Task<T> {
+  public advance(budget: number): boolean {
+    for (let i = 0; i < budget && !this.settled; i++) {
+      if (!this.step()) this.finish();
+    }
+    return !this.settled;
+  }
+
+  /** 推进一个基本单位；返回 `false` 表示全部工作已完成。 */
+  protected abstract step(): boolean;
+}
+
+/**
+ * 每一步可以 await 的运算——{@link Task} 的异步孪生，其余语义完全一致：中间状态都在实例上，
+ * 因此随时可停、可续、可做检查点。
+ *
+ * @remarks 另立一支而不是放宽 {@link Task.advance} 的返回值。后者看着更省，实则会在每个
+ *   同步驱动点埋雷：`while (task.advance(Infinity));` 遇到 Promise 是恒真，直接变成死循环，
+ *   而类型上毫无异样。`Future` 不实现 `Task`，于是 `settle(future)` 当场类型报错。
+ *
+ *   异步侧没有对应的契约接口（不像 `Task` / {@link Stepwise} 分两层），因为还没有
+ *   {@link ready} / {@link chain} 那样不走单步推进的异步实现。真需要时再拆。
+ */
+export abstract class Future<T> extends Progress<T> {
+  /** 推进至多 `budget` 个基本步；返回 `false` 表示已跑完。 */
+  public async advance(budget: number): Promise<boolean> {
+    for (let i = 0; i < budget && !this.settled; i++) {
+      if (!(await this.step())) this.finish();
+    }
+    return !this.settled;
+  }
+
+  /** 推进一个基本单位；返回 `false` 表示全部工作已完成。 */
+  protected abstract step(): Promise<boolean>;
 }
 
 /** 检查中断的步长：足够大以摊薄检查成本，足够小以保证响应及时。 */
@@ -205,10 +198,8 @@ const breathe = (): Promise<void> =>
     setTimeout(resume, 0);
   });
 
-class Ready<T> extends Task<T> {
-  public constructor(private readonly _value: T) {
-    super();
-  }
+class Ready<T> implements Task<T> {
+  public constructor(private readonly _value: T) {}
 
   public advance(): boolean {
     return false;
@@ -227,15 +218,13 @@ class Ready<T> extends Task<T> {
   }
 }
 
-class Sequence<A, B> extends Task<B> {
+class Sequence<A, B> implements Task<B> {
   private _second: Task<B> | undefined;
 
   public constructor(
     private readonly _first: Task<A>,
     private readonly _next: (value: A) => Task<B>,
-  ) {
-    super();
-  }
+  ) {}
 
   /**
    * @remarks 阶段交接处就返回，不在同一次调用里接着推进第二段——否则一次

@@ -130,6 +130,47 @@ describe("拓扑序", () => {
     expect(total).toBeCloseTo(result.length, 9);
   });
 
+  it("关键路径把点权一并算进去——编排里节点自己也耗时", () => {
+    const graph = new Graph<number, number>(graphId("timed"));
+    // 两条路：慢节点那条边轻，快节点那条边重。只看边权会挑错一条。
+    for (const [name, duration] of [
+      ["start", 1],
+      ["slow", 100],
+      ["fast", 2],
+      ["end", 1],
+    ] as const) {
+      graph.addNode(vertex(name, duration));
+    }
+    graph.connect([nodeId("start"), "out"], [nodeId("slow"), "in"], {
+      weight: 1,
+    });
+    graph.connect([nodeId("start"), "out"], [nodeId("fast"), "in"], {
+      weight: 50,
+    });
+    graph.connect([nodeId("slow"), "out"], [nodeId("end"), "in"], {
+      weight: 1,
+    });
+    graph.connect([nodeId("fast"), "out"], [nodeId("end"), "in"], {
+      weight: 1,
+    });
+
+    const edges = { weight: (w: number | undefined): number => w ?? 1 };
+    const both = { ...edges, cost: (w: number | undefined): number => w ?? 0 };
+
+    // 只编边权：fast 那条 50+1 胜出。
+    const byEdges = settle(criticalPath(Snapshot.of(graph, edges)));
+    expect(byEdges.length).toBe(51);
+    expect(Snapshot.of(graph, edges).names(byEdges.path)).toContain(
+      nodeId("fast"),
+    );
+
+    // 带上点权：slow 那条 1+100+1 反超，总长还要加上起终点自己的耗时。
+    const snapshot = Snapshot.of(graph, both);
+    const byBoth = settle(criticalPath(snapshot));
+    expect(snapshot.names(byBoth.path)).toContain(nodeId("slow"));
+    expect(byBoth.length).toBe(1 + 1 + 100 + 1 + 1);
+  });
+
   it("有环图上 toposort 抛 Cycle，acyclic 返回 false", () => {
     const snapshot = Snapshot.of(randomGraph(3, { order: 10, density: 4 }));
     expect(settle(acyclic(snapshot))).toBe(false);
@@ -237,7 +278,7 @@ describe("连通性", () => {
     const result = settle(cuts(snapshot));
 
     const bridges = result.bridges.map((b) =>
-      undirectedKey(snapshot.label(b.from), snapshot.label(b.to)),
+      undirectedKey(snapshot.node(b.from), snapshot.node(b.to)),
     );
     expect(bridges.sort()).toEqual([...naive.bridges(graph)].sort());
     expect(snapshot.names(result.articulations).sort()).toEqual(
@@ -256,7 +297,7 @@ describe("连通性", () => {
     for (let u = 0; u < snapshot.order; u++) if (found[u] !== -1) covered++;
     expect(covered).toBe(expected.size);
     for (const [node, idom] of expected) {
-      expect(snapshot.label(found[snapshot.indexOf(node)]!)).toBe(idom);
+      expect(snapshot.node(found[snapshot.indexOf(node)]!)).toBe(idom);
     }
   });
 
@@ -272,8 +313,8 @@ describe("连通性", () => {
         for (let i = 0; i < cycle.length; i++) {
           expect(
             graph.adjacent(
-              snapshot.label(cycle[i]!),
-              snapshot.label(cycle[(i + 1) % cycle.length]!),
+              snapshot.node(cycle[i]!),
+              snapshot.node(cycle[(i + 1) % cycle.length]!),
             ),
           ).toBe(true);
         }
@@ -330,8 +371,8 @@ describe("可达性", () => {
     }
     for (const [from, to] of kept) {
       reduced.connect(
-        [snapshot.label(from), "out"],
-        [snapshot.label(to), "in"],
+        [snapshot.node(from), "out"],
+        [snapshot.node(to), "in"],
       );
     }
 
@@ -514,8 +555,8 @@ describe("最小生成森林", () => {
     for (const link of links) {
       const id = snapshot.edges[link.edge]!;
       const ends = undirectedKey(
-        snapshot.label(link.source),
-        snapshot.label(link.target),
+        snapshot.node(link.source),
+        snapshot.node(link.target),
       );
       expect(graph.hasEdge(id)).toBe(true);
       expect(edgeKey(graph, id)).toBe(ends);
@@ -552,8 +593,8 @@ describe("负环归因", () => {
     for (let i = 0; i < members.length; i++) {
       expect(
         graph.adjacent(
-          snapshot.label(members[i]!),
-          snapshot.label(members[(i + 1) % members.length]!),
+          snapshot.node(members[i]!),
+          snapshot.node(members[(i + 1) % members.length]!),
         ),
       ).toBe(true);
     }
@@ -578,6 +619,7 @@ describe("NaN 权重防线", () => {
       edge: Int32Array.of(0, 1),
     },
     weight: Float64Array.of(3, NaN),
+    cost: undefined,
   };
 
   const guarded = [

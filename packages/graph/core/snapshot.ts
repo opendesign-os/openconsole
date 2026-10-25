@@ -2,14 +2,24 @@
  * 从可变 {@link Graph} 编译出的不可变 CSR 快照。
  *
  * @remarks 契约本身（{@link Structure} 与它的派生量）在 `./structure`，那个模块不认识
- *   `Graph`；这里是唯一一处把两侧接起来的地方。
+ *   `Graph`；编译的机器在 `./compile`。这里只有成品：{@link Structure} 的默认实现、
+ *   索引 ↔ id 的标签层，以及跨线程的搬运与还原。
  *
  * @packageDocumentation
  */
 
 import type { Ints, Reals } from "./array";
-import { Invalid, Schema, Stale } from "./error";
-import type { EdgeRecord, Graph } from "./graph";
+import {
+  compile,
+  nodeCosts,
+  recipeOf,
+  sameLayers,
+  edgeWeights,
+  type Recipe,
+  type Source,
+} from "./compile";
+import { Schema, Stale } from "./error";
+import type { Graph, Wire } from "./graph";
 import type { EdgeId, GraphId, NodeId } from "./ident";
 import { inboundOf, type Adjacency, type Structure } from "./structure";
 
@@ -17,16 +27,24 @@ export interface CompileOptions<N = unknown, E = unknown> {
   /** 只保留满足谓词的节点。 */
   node?: (node: NodeId, weight: N | undefined) => boolean;
   /** 只保留满足谓词的边；两端节点也必须保留。 */
-  edge?: (edge: EdgeRecord<E>) => boolean;
+  edge?: (edge: Wire & { readonly weight: E | undefined }) => boolean;
   /** 把这些分组各折叠成单节点：其后代不再单独出现，跨组边聚合到组上、组内边消失。 */
   collapse?: Iterable<NodeId>;
   /**
-   * 边权，只吃边自己的权重值。省略则不编译权重，最短路类算法将无法运行。
+   * 边权，只吃边自己的权重值。省略则不编译边权，最短路类算法将无法运行。
    *
-   * @remarks 签名不给整条 {@link EdgeRecord}，是为了让增量重编译只依赖权重值——
-   *   结构没变时重算全部边权就是一遍纯下标扫描。要按端点算权就把它烘进 `E` 里。
+   * @remarks 签名不给整条边，是为了让增量重编译只依赖权重值——改一个节点的参数因此
+   *   不会牵动边权数组。要按端点算权就把它烘进 `E` 里。
    */
   weight?: (weight: E | undefined) => number;
+  /**
+   * 点权，只吃节点自己的权重值。省略则不编译点权，全部节点按 0 计。
+   *
+   * @remarks 与 {@link CompileOptions.weight} 对称，且两者各自独立作废：改边权不重算
+   *   点权，改点权不重算边权。编排里节点自身的耗时走这条路——它摊不进边权（扇入大于 1
+   *   时会被重复计数）。
+   */
+  cost?: (weight: N | undefined) => number;
   /** 视作无向：每条边在两端各出现一次。 */
   undirected?: boolean;
   /** 只编译出边方向，省掉一半内存与编译时间；{@link Snapshot.reverse} 与入向遍历将不可用。 */
@@ -34,23 +52,29 @@ export interface CompileOptions<N = unknown, E = unknown> {
   /** 平行边合并为一条：权重两两经此函数聚合（如 `Math.min`），边 id 取首条。 */
   merge?: (a: number, b: number) => number;
   /**
-   * 一并编译端口层：每条边记下两端的端口名。默认不编译。
+   * 边上的分类标注，层名自取。CSR 只有拓扑，"这条边挂在哪个引脚上""这条边属于哪个分组"
+   * 在索引空间本来是问不到的——不编译就只能拿边序号回 {@link Graph} 查一次字符串。
    *
-   * @remarks 端口是这个包区别于普通图库的地方，可"这条边挂在哪个引脚上"在索引空间是问不到的
-   *   ——不编译就只能拿边序号回 {@link Graph} 查一次字符串。编排执行器按引脚名分派分支、
-   *   布局按引脚定锚点、调试面板标注连线，全都卡在这一步。
+   * @remarks 取值**intern 成整数**，全部层共用一张名字表（{@link Snapshot.words}）：
+   *   热循环里比的是整数，跨线程搬的是 typed-array，表的长度是取值**种类数**而非边数，
+   *   因此整层跟着 {@link Snapshot.core} 一起走，不像 O(V)/O(E) 的 id 标签那样要被裁掉。
    *
-   *   端口名**intern 成整数**（{@link Snapshot.sourcePort} 是 `Int32Array`，
-   *   {@link Snapshot.ports} 是名字表）：热循环里比的是整数，跨线程搬的是 typed-array。
-   *   名字表的长度是引脚**种类数**而非边数，所以它跟着 {@link Snapshot.core} 一起走，
-   *   不像 O(V)/O(E) 的 id 标签那样要被裁掉。
+   *   回调收的是 {@link Wire} 而不是整条边记录——看不到权重，于是层只依赖结构，
+   *   改权重时能整份复用。
+   *
+   * @example 端口层
+   * ```ts
+   * Snapshot.of(graph, {
+   *   layer: { source: (wire) => wire.sourcePort, target: (wire) => wire.targetPort },
+   * });
+   * ```
    */
-  ports?: boolean;
+  layer?: Readonly<Record<string, (wire: Wire) => string>>;
   /** CSR 与权重分配在 `SharedArrayBuffer` 上，多个 Worker 可零拷贝共享；标签层不受影响。 */
   shared?: boolean;
   /**
-   * 上一份快照。结构自它编译以来没变过就地复用 CSR，只重算边权；图与 `weight` 回调
-   * 引用都没变则原样返回。编译选项不一致或用了谓词 / 折叠 / 合并时自动退回全量编译，
+   * 上一份快照。结构自它编译以来没变过就复用 CSR，只重算真正作废的那条权重数组；
+   * 什么都没动则原样返回。编译选项不一致或用了谓词 / 折叠 / 合并时自动退回全量编译，
    * 因此传错不会出错，只是没有加速。
    */
   reuse?: Snapshot;
@@ -63,57 +87,28 @@ export interface SnapshotData {
   readonly order: number;
   readonly size: number;
   /** 索引 → 节点 id；按 {@link Snapshot.core} 搬运时缺省。 */
-  readonly labels?: ReadonlyArray<NodeId> | undefined;
+  readonly nodes?: ReadonlyArray<NodeId> | undefined;
   /** 边序号 → 边 id；按 {@link Snapshot.core} 搬运时缺省。 */
   readonly edges?: ReadonlyArray<EdgeId> | undefined;
   readonly outbound: Adjacency;
   readonly inbound?: Adjacency | undefined;
-  /** 边序号 → 权重。正反向共享一份。 */
+  /** 边序号 → 边权。正反向共享一份。 */
   readonly weight?: Reals | undefined;
-  /** 边序号 → 源端口编号，编号查 {@link SnapshotData.ports}；未编译端口层时缺省。 */
-  readonly sourcePort?: Ints | undefined;
-  /** 边序号 → 目标端口编号。 */
-  readonly targetPort?: Ints | undefined;
-  /** 端口编号 → 端口名。长度是引脚种类数，因此随 {@link Snapshot.core} 一起搬运。 */
-  readonly ports?: ReadonlyArray<string> | undefined;
+  /** 节点索引 → 点权。 */
+  readonly cost?: Reals | undefined;
+  /** 层名 → 边序号索引的编号数组，编号查 {@link SnapshotData.words}。 */
+  readonly layers?: Readonly<Record<string, Ints>> | undefined;
+  /** 编号 → 取值名，全部层共用。长度是取值种类数，因此随 {@link Snapshot.core} 一起搬运。 */
+  readonly words?: ReadonlyArray<string> | undefined;
 }
 
-const UNLABELED: ReadonlyArray<never> = [];
+const NONE: ReadonlyArray<never> = [];
+const BARE: Readonly<Record<string, Ints>> = {};
 
 /** 名字 → 序号表的惰性容器；`reverse` 与增量重编译共享同一个，避免重复建表。 */
 interface Lookup {
   nodes?: ReadonlyMap<NodeId, number>;
-  ports?: ReadonlyMap<string, number>;
-}
-
-/** 编译选项的指纹。整组一致才谈得上复用，因此作为一个值传递与比对。 */
-interface Recipe {
-  /** 没用谓词、折叠或合并——只有这种编译的结构才由 `shape` 完全决定。 */
-  readonly plain: boolean;
-  readonly undirected: boolean;
-  readonly outbound: boolean;
-  readonly shared: boolean;
-  readonly ports: boolean;
-  /** 编译时的 `weight` 回调。引用变了说明语义可能已变，权重必须重算。 */
-  readonly weigh: unknown;
-}
-
-/** 编译来源：配方指纹之上再记下是从哪张图的哪个版本编出来的。 */
-interface Source extends Recipe {
-  /**
-   * 弱引用：快照可能活得比源图久（缓存在算法层、挂在 UI 状态上），强引用会把整张图连同
-   * 全部端口对象一起钉住——快照自身可能只有几百 KB，钉住的图却是它的几十倍。
-   */
-  readonly graph: WeakRef<{
-    readonly revision: number;
-    readonly shape: number;
-  }>;
-  /** 编译时的 `graph.shape`。 */
-  readonly shape: number;
-  /** 出入向已被 {@link Snapshot.reverse} 对调过；这样的快照不能再拿去复用。 */
-  readonly flipped: boolean;
-  /** CSR 边序号 → 图内边槽位。结构不变时槽位不动，据此可零哈希地重算边权。 */
-  readonly slots: Int32Array;
+  words?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -124,7 +119,7 @@ interface Source extends Recipe {
  * 因此运行期没有任何谓词回调或视图转发的开销。
  *
  * 这个类在 `Structure` 之上多出的只有**标签层**：索引 ↔ {@link NodeId} 的互查，以及
- * 可选的端口层（见 {@link CompileOptions.ports}）。算法产出的是索引，需要名字时在边界上用
+ * 可选的标注层（见 {@link CompileOptions.layer}）。算法产出的是索引，需要名字时在边界上用
  * {@link Snapshot.names} 换。
  */
 export class Snapshot implements Structure {
@@ -133,17 +128,16 @@ export class Snapshot implements Structure {
   public readonly order: number;
   public readonly size: number;
   /** 按 {@link Snapshot.core} 搬运过来的快照没有标签层，这里是空数组。 */
-  public readonly labels: ReadonlyArray<NodeId>;
+  public readonly nodes: ReadonlyArray<NodeId>;
   public readonly edges: ReadonlyArray<EdgeId>;
   public readonly outbound: Adjacency;
   public readonly inbound: Adjacency | undefined;
   public readonly weight: Reals | undefined;
-  /** 边序号 → 源端口编号；未编译端口层时为 `undefined`。 */
-  public readonly sourcePort: Ints | undefined;
-  /** 边序号 → 目标端口编号。 */
-  public readonly targetPort: Ints | undefined;
-  /** 端口编号 → 端口名；未编译端口层时为空。 */
-  public readonly ports: ReadonlyArray<string>;
+  public readonly cost: Reals | undefined;
+  /** 层名 → 边序号索引的编号数组；未编译标注层时为空。 */
+  public readonly layers: Readonly<Record<string, Ints>>;
+  /** 编号 → 取值名，全部层共用；未编译标注层时为空。 */
+  public readonly words: ReadonlyArray<string>;
 
   /** 建表是惰性的：只跑索引空间算法的消费者（尤其是 Worker 侧）一次哈希都不用付。 */
   private readonly _lookup: Lookup;
@@ -154,74 +148,73 @@ export class Snapshot implements Structure {
     this.revision = data.revision;
     this.order = data.order;
     this.size = data.size;
-    this.labels = data.labels ?? UNLABELED;
-    this.edges = data.edges ?? UNLABELED;
+    this.nodes = data.nodes ?? NONE;
+    this.edges = data.edges ?? NONE;
     this.outbound = data.outbound;
     this.inbound = data.inbound;
     this.weight = data.weight;
-    this.sourcePort = data.sourcePort;
-    this.targetPort = data.targetPort;
-    this.ports = data.ports ?? UNLABELED;
+    this.cost = data.cost;
+    this.layers = data.layers ?? BARE;
+    this.words = data.words ?? NONE;
     this._lookup = lookup ?? {};
     this._source = source;
   }
 
   public indexOf(node: NodeId): number {
     const lookup = this._lookup;
-    const map = (lookup.nodes ??= locate(this.labels));
+    const map = (lookup.nodes ??= locate(this.nodes));
     return map.get(node) ?? -1;
   }
 
   /**
-   * 端口名 → 端口编号；这张图里没出现过这个名字则为 -1。
+   * 取一层标注：边序号 → 编号。
+   *
+   * @throws `RangeError` 没编译过这一层——与"这条边没有标注"分得开
+   */
+  public layer(name: string): Ints {
+    const found = this.layers[name];
+    if (found === undefined) {
+      throw new RangeError(`layer "${name}" was not compiled; pass it in \`layer\``);
+    }
+    return found;
+  }
+
+  /**
+   * 取值名 → 编号；这张图里没出现过则为 -1。
    *
    * @remarks 分派分支时在循环外换一次编号，循环里就只剩整数比较——按名字逐边比字符串，
    *   在高扇出节点上是实打实的开销。名字表按需建，只跑纯拓扑算法的消费者不必付。
    */
-  public portOf(name: string): number {
+  public code(word: string): number {
     const lookup = this._lookup;
-    const map = (lookup.ports ??= locate(this.ports));
-    return map.get(name) ?? -1;
+    const map = (lookup.words ??= locate(this.words));
+    return map.get(word) ?? -1;
   }
 
-  /** 边序号 → 源端口名。@throws `RangeError` 未编译端口层，或边序号越界 */
-  public sourcePortAt(edge: number): string {
-    return this._name(this.sourcePort, edge, "sourcePortAt");
-  }
-
-  /** 边序号 → 目标端口名，语义同 {@link Snapshot.sourcePortAt}。 */
-  public targetPortAt(edge: number): string {
-    return this._name(this.targetPort, edge, "targetPortAt");
-  }
-
-  private _name(side: Ints | undefined, edge: number, caller: string): string {
-    if (side === undefined) {
-      throw new RangeError(
-        caller + " needs the port layer; compile with `ports: true`",
-      );
-    }
-    const found = this.ports[side[edge]!];
+  /** 编号 → 取值名。@throws `RangeError` 编号越界 */
+  public word(code: number): string {
+    const found = this.words[code];
     if (found === undefined) {
-      throw new RangeError(`edge index ${edge} is out of range`);
+      throw new RangeError(`layer code ${code} is out of range`);
     }
     return found;
   }
 
   /** 外部查询用：越界返回 `undefined`。 */
   public at(index: number): NodeId | undefined {
-    return this.labels[index];
+    return this.nodes[index];
   }
 
   /**
    * 内部遍历用：索引来自 `0 .. order-1`，越界属于程序错误而非查询失败。
    * 把这个不变量收在一处，调用点就不必到处写非空断言。
    */
-  public label(index: number): NodeId {
-    const found = this.labels[index];
+  public node(index: number): NodeId {
+    const found = this.nodes[index];
     if (found === undefined) {
       throw new RangeError(
-        this.labels.length === 0 && this.order > 0
-          ? "snapshot was transferred without labels; send `data` instead of `core`"
+        this.nodes.length === 0 && this.order > 0
+          ? "snapshot was transferred without the label layer; send `data` instead of `core`"
           : `node index ${index} is out of range`,
       );
     }
@@ -231,7 +224,7 @@ export class Snapshot implements Structure {
   /** 批量把索引换成名字——算法产出与人看的东西之间的那道边界。 */
   public names(indices: Iterable<number>): NodeId[] {
     const found: NodeId[] = [];
-    for (const index of indices) found.push(this.label(index));
+    for (const index of indices) found.push(this.node(index));
     return found;
   }
 
@@ -240,7 +233,7 @@ export class Snapshot implements Structure {
    *
    * @remarks 标签是字符串数组，结构化克隆时只能逐个深拷贝——V=5 万的快照里它占掉整份
    *   `data` 克隆耗时的九成（21ms → 1.9ms），而只跑索引空间算法的 Worker 侧根本用不到它。
-   *   这样还原出来的快照 `at` / `indexOf` 查不到东西，`label` / `names` 明确报错。
+   *   这样还原出来的快照 `at` / `indexOf` 查不到东西，`node` / `names` 明确报错。
    */
   public get core(): SnapshotData {
     return {
@@ -251,11 +244,11 @@ export class Snapshot implements Structure {
       outbound: this.outbound,
       inbound: this.inbound,
       weight: this.weight,
-      // 端口层整体随 core 走：两条边序号数组是 typed-array，名字表的长度是引脚种类数，
+      cost: this.cost,
+      // 标注层整体随 core 走：编号数组是 typed-array，名字表的长度是取值种类数，
       // 都不像 O(V)/O(E) 的 id 标签那样贵到需要裁掉。
-      sourcePort: this.sourcePort,
-      targetPort: this.targetPort,
-      ports: this.ports === UNLABELED ? undefined : this.ports,
+      layers: this.layers === BARE ? undefined : this.layers,
+      words: this.words === NONE ? undefined : this.words,
     };
   }
 
@@ -265,8 +258,8 @@ export class Snapshot implements Structure {
     // 否则中转 Worker 转发它的 data 时会被 `Snapshot.from` 判作"0 个标签对 N 个节点"。
     return {
       ...this.core,
-      labels: this.labels === UNLABELED ? undefined : this.labels,
-      edges: this.edges === UNLABELED ? undefined : this.edges,
+      nodes: this.nodes === NONE ? undefined : this.nodes,
+      edges: this.edges === NONE ? undefined : this.edges,
     };
   }
 
@@ -313,139 +306,23 @@ export class Snapshot implements Structure {
     graph: Graph<N, E>,
     options: CompileOptions<N, E> = {},
   ): Snapshot {
-    const collapse = options.collapse ? [...options.collapse] : [];
-    const recipe: Recipe = {
-      plain:
-        options.node === undefined &&
-        options.edge === undefined &&
-        options.merge === undefined &&
-        collapse.length === 0,
-      undirected: options.undirected === true,
-      outbound: options.outbound === true,
-      shared: options.shared === true,
-      ports: options.ports === true,
-      weigh: options.weight,
-    };
-
-    const recycled = options.reuse?._recycle(graph, recipe, options.weight);
+    const recipe = recipeOf(options);
+    const recycled = options.reuse?._recycle(graph, recipe, options);
     if (recycled) return recycled;
-
-    const { undirected, shared } = recipe;
-
-    const represent = folding(graph, collapse);
-    const place = new Int32Array(graph.bound).fill(-1);
-    const labels: NodeId[] = [];
-    graph.forEachNode((id, weight, slot) => {
-      if (represent(slot) !== slot) return;
-      if (options.node?.(id, weight) === false) return;
-      place[slot] = labels.length;
-      labels.push(id);
-    });
-
-    const capacity = graph.size;
-    const tail = new Int32Array(capacity);
-    const head = new Int32Array(capacity);
-    const slots = new Int32Array(capacity);
-    const keep = options.edge;
-    let count = 0;
-
-    graph.forEachLink((e, from, to) => {
-      const source = represent(from);
-      const target = represent(to);
-      const u = place[source]!;
-      const v = place[target]!;
-      if (u < 0 || v < 0) return;
-      // 组内边随折叠一起消失；未被折叠的真自环保留。
-      if (u === v && (source !== from || target !== to)) return;
-      if (keep !== undefined && keep(graph.edgeAt(e)!) === false) return;
-      tail[count] = u;
-      head[count] = v;
-      slots[count] = e;
-      count++;
-    });
-
-    const order = labels.length;
-    let weight = measure(graph, slots, count, options.weight, shared);
-    if (options.merge !== undefined) {
-      count = coalesce(
-        tail,
-        head,
-        slots,
-        count,
-        order,
-        undirected,
-        weight,
-        options.merge,
-      );
-      if (weight !== undefined) {
-        // 聚合能从有限值造出 NaN（如 Infinity 相消），与 measure 同一道关，在源头拦。
-        for (let i = 0; i < count; i++) {
-          if (Number.isNaN(weight[i])) {
-            throw new Invalid(graph.edgeIdAt(slots[i]!)!);
-          }
-        }
-        // 合并后长度缩水，裁一份紧的，快照不拖超配的尾巴。
-        const packed = reals(count, shared);
-        packed.set(weight.subarray(0, count));
-        weight = packed;
-      }
-    }
-
-    // 边 id 与端口层共用这一趟：`slots` 此时已是合并后的紧凑序，逐个回查即可。
-    const edges: EdgeId[] = new Array(count);
-    const naming = recipe.ports ? new Interner() : undefined;
-    const sourcePort = naming && ints(count, shared);
-    const targetPort = naming && ints(count, shared);
-    for (let i = 0; i < count; i++) {
-      const slot = slots[i]!;
-      edges[i] = graph.edgeIdAt(slot)!;
-      if (naming) {
-        sourcePort![i] = naming.of(graph.sourcePortAt(slot)!);
-        targetPort![i] = naming.of(graph.targetPortAt(slot)!);
-      }
-    }
-
-    const outbound = adjacency(order, tail, head, count, undirected, shared);
-    const inbound = recipe.outbound
-      ? undefined
-      : undirected
-        ? outbound
-        : adjacency(order, head, tail, count, false, shared);
-
-    return new Snapshot(
-      {
-        graph: graph.id,
-        revision: graph.revision,
-        order,
-        size: count,
-        labels,
-        edges,
-        outbound,
-        inbound,
-        weight,
-        sourcePort,
-        targetPort,
-        ports: naming?.table,
-      },
-      {
-        ...recipe,
-        graph: new WeakRef(graph),
-        shape: graph.shape,
-        flipped: false,
-        slots: slots.slice(0, count),
-      },
-    );
+    const { data, source } = compile(graph, options, recipe);
+    return new Snapshot(data, source);
   }
 
   /**
-   * 增量重编译：结构没变就复用 CSR，只重算边权；连权重都没变则原样返回自己。
+   * 增量重编译：结构没变就复用 CSR，只重算真正作废的那条权重数组；什么都没动则原样
+   * 返回自己。改一个节点的参数因此不会牵动边权——那是编辑器里最频繁的一类变更。
    *
    * @returns 不满足复用条件时返回 `undefined`，由调用方走全量编译
    */
   private _recycle<N, E>(
     graph: Graph<N, E>,
     recipe: Recipe,
-    weight: ((weight: E | undefined) => number) | undefined,
+    options: CompileOptions<N, E>,
   ): Snapshot | undefined {
     const source = this._source;
     if (source === undefined) return undefined;
@@ -458,121 +335,72 @@ export class Snapshot implements Structure {
     if (source.undirected !== recipe.undirected) return undefined;
     if (source.outbound !== recipe.outbound) return undefined;
     if (source.shared !== recipe.shared) return undefined;
-    if (source.ports !== recipe.ports) return undefined;
+    if (!sameLayers(source.layer, recipe.layer)) return undefined;
     if (source.shape !== graph.shape) return undefined;
 
-    if (graph.revision === this.revision && weight === source.weigh) {
-      return this;
-    }
-    const slots = source.slots;
+    const weighed =
+      recipe.weigh !== source.weigh || graph.weights !== source.weights;
+    const priced =
+      recipe.price !== source.price || graph.costs !== source.costs;
+    // 任何变更都会推进两个计数器之一，因此两边都没动就等于图没动过。
+    if (!weighed && !priced) return this;
+
     return new Snapshot(
       {
-        graph: this.graph,
+        ...this.data,
         revision: graph.revision,
-        order: this.order,
-        size: this.size,
-        labels: this.labels,
-        edges: this.edges,
-        outbound: this.outbound,
-        inbound: this.inbound,
-        weight: measure(graph, slots, slots.length, weight, source.shared),
-        // 端口只会被 `reshape` 改动，那会推进 `shape`，上面的检查已经拦下。
-        sourcePort: this.sourcePort,
-        targetPort: this.targetPort,
-        ports: this.ports === UNLABELED ? undefined : this.ports,
+        weight: weighed
+          ? edgeWeights(
+              graph,
+              source.edges,
+              source.edges.length,
+              source.shared,
+              options.weight,
+            )
+          : this.weight,
+        cost: priced
+          ? nodeCosts(
+              graph,
+              source.nodes,
+              source.nodes.length,
+              source.shared,
+              options.cost,
+            )
+          : this.cost,
       },
-      { ...source, shape: graph.shape, weigh: weight },
+      {
+        ...source,
+        revision: graph.revision,
+        shape: graph.shape,
+        weights: graph.weights,
+        costs: graph.costs,
+        weigh: recipe.weigh,
+        price: recipe.price,
+      },
       this._lookup,
     );
   }
 }
 
-function ints(length: number, shared: boolean): Int32Array {
-  return shared
-    ? new Int32Array(new SharedArrayBuffer(4 * length))
-    : new Int32Array(length);
-}
-
-function reals(length: number, shared: boolean): Float64Array {
-  return shared
-    ? new Float64Array(new SharedArrayBuffer(8 * length))
-    : new Float64Array(length);
-}
-
-/** @throws {@link Invalid} `weight` 回调给出了 `NaN` */
-function measure<N, E>(
-  graph: Graph<N, E>,
-  slots: Int32Array,
-  count: number,
-  weight: ((weight: E | undefined) => number) | undefined,
-  shared: boolean,
-): Float64Array | undefined {
-  if (weight === undefined) return undefined;
-  const costs = reals(count, shared);
-  for (let i = 0; i < count; i++) {
-    const slot = slots[i]!;
-    const cost = weight(graph.edgeWeightAt(slot));
-    // 在这里拦，报得出边 id；漏到算法里就只剩一个静默的"不可达"。
-    if (Number.isNaN(cost)) throw new Invalid(graph.edgeIdAt(slot)!);
-    costs[i] = cost;
-  }
-  return costs;
-}
-
-/** 平行边就地去重：首条留位，其余的权重经 `merge` 折进首条；返回合并后的边数。 */
-function coalesce(
-  tail: Int32Array,
-  head: Int32Array,
-  slots: Int32Array,
-  count: number,
-  order: number,
-  undirected: boolean,
-  weight: Float64Array | undefined,
-  merge: (a: number, b: number) => number,
-): number {
-  const seen = new Map<number, number>();
-  let kept = 0;
-  for (let i = 0; i < count; i++) {
-    let u = tail[i]!;
-    let v = head[i]!;
-    if (undirected && v < u) {
-      const flip = u;
-      u = v;
-      v = flip;
-    }
-    // order < 2²⁶ 时 u·order+v 不超过 2⁵³，键精确；标签层远在那个规模之前就会
-    // 先耗尽内存，故不为这个理论上限付分桶或字符串键的开销。
-    const key = u * order + v;
-    const at = seen.get(key);
-    if (at === undefined) {
-      seen.set(key, kept);
-      tail[kept] = tail[i]!;
-      head[kept] = head[i]!;
-      slots[kept] = slots[i]!;
-      if (weight !== undefined) weight[kept] = weight[i]!;
-      kept++;
-    } else if (weight !== undefined) {
-      weight[at] = merge(weight[at]!, weight[i]!);
-    }
-  }
-  return kept;
-}
-
 /** @throws {@link Schema} 字段长度相互矛盾 */
 function conform(data: SnapshotData): void {
-  const { order, size, labels, edges, weight, ports } = data;
+  const { order, size, nodes, edges, weight, cost, layers, words } = data;
   fit(data.outbound, order, size, "outbound");
   const inbound = data.inbound;
   if (inbound !== undefined && inbound !== data.outbound) {
     fit(inbound, order, size, "inbound");
   }
-  bounded(data.sourcePort, ports, size, "sourcePort");
-  bounded(data.targetPort, ports, size, "targetPort");
+  for (const [name, codes] of Object.entries(layers ?? {})) {
+    bounded(codes, words, size, name);
+  }
   if (weight !== undefined && weight.length !== size) {
     throw new Schema(`weight has ${weight.length} entries for ${size} edges`);
   }
-  if (labels !== undefined && labels.length !== order) {
-    throw new Schema(`${labels.length} labels for ${order} nodes`);
+  if (cost !== undefined && cost.length !== order) {
+    throw new Schema(`cost has ${cost.length} entries for ${order} nodes`);
+  }
+  if (nodes !== undefined && nodes.length !== order) {
+    throw new Schema(`${nodes.length} node ids for ${order} nodes`);
   }
   if (edges !== undefined && edges.length !== size) {
     throw new Schema(`${edges.length} edge ids for ${size} edges`);
@@ -585,7 +413,7 @@ function conform(data: SnapshotData): void {
  * @remarks 长度对不代表内容对。错位或截断的搬运数据完全可能长度全中而下标越界，
  *   而越界的 `other[k]` 读出来是 `undefined`——比较、累加一路静默走下去，最后得到一个
  *   形状正常的错答案。这一遍是 O(E)，只在 {@link Snapshot.from} 还原时跑，
- *   {@link Snapshot.of} 自己编出来的结构不必付。
+ *   编译出来的结构不必付。
  */
 function fit(
   adjacency: Adjacency,
@@ -628,22 +456,23 @@ function fit(
   }
 }
 
-/** 端口层的两条编号数组是否与名字表对得上。 */
+/** 一层标注的编号数组是否与名字表对得上。 */
 function bounded(
-  side: Ints | undefined,
-  names: ReadonlyArray<string> | undefined,
+  codes: Ints,
+  words: ReadonlyArray<string> | undefined,
   size: number,
-  label: string,
+  name: string,
 ): void {
-  if (side === undefined) return;
-  if (side.length !== size) {
-    throw new Schema(`${label} has ${side.length} entries for ${size} edges`);
+  if (codes.length !== size) {
+    throw new Schema(
+      `layer "${name}" has ${codes.length} entries for ${size} edges`,
+    );
   }
-  const width = names?.length ?? 0;
+  const width = words?.length ?? 0;
   for (let e = 0; e < size; e++) {
-    if (side[e]! < 0 || side[e]! >= width) {
+    if (codes[e]! < 0 || codes[e]! >= width) {
       throw new Schema(
-        `${label}[${e}] is ${side[e]} but only ${width} port name(s) were sent`,
+        `layer "${name}"[${e}] is ${codes[e]} but only ${width} name(s) were sent`,
       );
     }
   }
@@ -653,97 +482,4 @@ function locate<K>(names: ReadonlyArray<K>): ReadonlyMap<K, number> {
   const index = new Map<K, number>();
   for (let i = 0; i < names.length; i++) index.set(names[i]!, i);
   return index;
-}
-
-/**
- * 端口名 → 编号。
- *
- * @remarks 表的长度是引脚**种类数**（`in` / `out` / `yes` / `no` 这种），与边数无关，
- *   因此几乎总在几十项以内——这正是端口层能整体塞进 {@link Snapshot.core} 的原因。
- */
-class Interner {
-  public readonly table: string[] = [];
-  private readonly _seen = new Map<string, number>();
-
-  public of(name: string): number {
-    const known = this._seen.get(name);
-    if (known !== undefined) return known;
-    const id = this.table.length;
-    this._seen.set(name, id);
-    this.table.push(name);
-    return id;
-  }
-}
-
-/**
- * 按 `tail → head` 建 CSR；`both` 为真时每条边在两端各出现一次。
- *
- * @remarks 计数与落位刻意写成裸循环而不是抽小函数：这两步是整个编译里最贵的单项，
- *   一旦包成捕获四个数组的闭包就拿不到内联。
- */
-function adjacency(
-  order: number,
-  tail: Int32Array,
-  head: Int32Array,
-  count: number,
-  both: boolean,
-  shared: boolean,
-): Adjacency {
-  const offset = ints(order + 1, shared);
-  for (let e = 0; e < count; e++) {
-    const t = tail[e]!;
-    offset[t + 1] = offset[t + 1]! + 1;
-    const h = head[e]!;
-    if (both && h !== t) offset[h + 1] = offset[h + 1]! + 1;
-  }
-  for (let u = 0; u < order; u++) offset[u + 1] = offset[u + 1]! + offset[u]!;
-
-  const other = ints(offset[order]!, shared);
-  const edge = ints(offset[order]!, shared);
-  const cursor = Int32Array.from(offset.subarray(0, order));
-  for (let e = 0; e < count; e++) {
-    const t = tail[e]!;
-    const h = head[e]!;
-    let slot = cursor[t]!;
-    cursor[t] = slot + 1;
-    other[slot] = h;
-    edge[slot] = e;
-    if (both && h !== t) {
-      slot = cursor[h]!;
-      cursor[h] = slot + 1;
-      other[slot] = t;
-      edge[slot] = e;
-    }
-  }
-  return { offset, other, edge };
-}
-
-/** 节点槽位 → 代表节点槽位：祖先中最外层的被折叠分组，没有则是自身。 */
-function folding<N, E>(
-  graph: Graph<N, E>,
-  groups: ReadonlyArray<NodeId>,
-): (slot: number) => number {
-  if (groups.length === 0) return (slot) => slot;
-  const collapsed = new Set<number>();
-  for (const id of groups) {
-    const u = graph.indexOf(id);
-    if (u >= 0) collapsed.add(u);
-  }
-  if (collapsed.size === 0) return (slot) => slot;
-
-  const cache = new Int32Array(graph.bound).fill(-1);
-  return (slot: number): number => {
-    const known = cache[slot]!;
-    if (known >= 0) return known;
-    let representative = slot;
-    for (
-      let cursor = graph.parentAt(slot);
-      cursor !== -1;
-      cursor = graph.parentAt(cursor)
-    ) {
-      if (collapsed.has(cursor)) representative = cursor;
-    }
-    cache[slot] = representative;
-    return representative;
-  };
 }

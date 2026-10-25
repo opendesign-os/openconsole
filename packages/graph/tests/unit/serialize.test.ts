@@ -116,10 +116,10 @@ describe("紧凑格式", () => {
     expect(canonical(unpack<number, number>(bundle))).toBe(canonical(graph));
   });
 
-  it("keepShortIds 保留短 id", () => {
+  it("revive: false 保留短 id", () => {
     const graph = randomGraph(53, { order: 6, density: 1 });
     const short = unpack<number, number>(pack(graph, { intern: true }), {
-      keepShortIds: true,
+      revive: false,
     });
 
     expect(short.hasNode(nodeId("0"))).toBe(true);

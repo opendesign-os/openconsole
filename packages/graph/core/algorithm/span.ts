@@ -1,10 +1,8 @@
 import { LazyQueue } from "@openconsole/queue";
 
 import { seek, type Reals } from "../array";
-import { costs, mirror, type Adjacency, type Structure } from "../structure";
+import { mirror, weights, type Adjacency, type Structure } from "../structure";
 import { Stepwise, type Task } from "../task";
-
-const NONE = -1;
 
 /** 最小生成森林里选中的一条边，全部是索引。 */
 export interface Link {
@@ -24,7 +22,7 @@ class Prim extends Stepwise<Link[]> {
   private readonly _from: Int32Array;
   private readonly _slot: Int32Array;
   private readonly _inTree: Uint8Array;
-  /** 需要额外扫的反向邻接；无向结构两侧同源，留空即可。 */
+  /** 需额外扫的反向邻接；见 {@link mirror}。 */
   private readonly _inbound: Adjacency | undefined;
   private readonly _weight: Reals | undefined;
   private readonly _queue: LazyQueue;
@@ -37,12 +35,12 @@ class Prim extends Stepwise<Link[]> {
     const n = _structure.order;
     this._queue = new LazyQueue(n);
     this._reach = new Float64Array(n).fill(Infinity);
-    this._from = new Int32Array(n).fill(NONE);
-    this._slot = new Int32Array(n).fill(NONE);
+    this._from = new Int32Array(n).fill(-1);
+    this._slot = new Int32Array(n).fill(-1);
     this._inTree = new Uint8Array(n);
     // 生成树是无向概念：缺入向会漏掉整个分支（`0→2, 1→2` 上只给一条边）。
     this._inbound = mirror(_structure, "prim");
-    this._weight = costs(_structure);
+    this._weight = weights(_structure);
   }
 
   protected measure(): number {
@@ -51,7 +49,7 @@ class Prim extends Stepwise<Link[]> {
 
   protected step(): boolean {
     const u = this._queue.poll();
-    if (u === NONE) {
+    if (u === -1) {
       this._root = seek(this._inTree, this._root, 0);
       if (this._root >= this._structure.order) return false;
       this._reach[this._root] = 0;
@@ -62,7 +60,7 @@ class Prim extends Stepwise<Link[]> {
     this._inTree[u] = 1;
     this._seen++;
 
-    if (this._from[u] !== NONE) {
+    if (this._from[u] !== -1) {
       this._links.push({
         source: this._from[u]!,
         target: u,
@@ -122,11 +120,11 @@ class Kruskal extends Stepwise<Link[]> {
 
   public constructor(private readonly _structure: Structure) {
     super();
-    this._tail = new Int32Array(_structure.size).fill(NONE);
+    this._tail = new Int32Array(_structure.size).fill(-1);
     this._head = new Int32Array(_structure.size);
     this._parent = new Int32Array(_structure.order);
     this._rank = new Int32Array(_structure.order);
-    this._weight = costs(_structure);
+    this._weight = weights(_structure);
     this._queue = new LazyQueue(_structure.size);
     for (let u = 0; u < _structure.order; u++) this._parent[u] = u;
   }
@@ -143,7 +141,7 @@ class Kruskal extends Stepwise<Link[]> {
     }
 
     const e = this._queue.poll();
-    if (e === NONE) return false;
+    if (e === -1) return false;
     this._polled++;
     const a = this._find(this._tail[e]!);
     const b = this._find(this._head[e]!);
@@ -165,7 +163,7 @@ class Kruskal extends Stepwise<Link[]> {
     const weight = this._weight;
     for (let k = offset[u]!; k < offset[u + 1]!; k++) {
       const e = edge[k]!;
-      if (this._tail[e] !== NONE) continue;
+      if (this._tail[e] !== -1) continue;
       const cost = weight === undefined ? 1 : weight[e]!;
       this._tail[e] = u;
       this._head[e] = other[k]!;

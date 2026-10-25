@@ -10,14 +10,17 @@
 
 import { Signal, type EventType } from "@openconsole/signal";
 
-/** 事务边界事件的载荷。 */
-export interface Flushed {
-  /** 本次事务里的变更条数。 */
-  changes: number;
-}
-
 /** 事务边界事件的名字；事件表必须声明它。 */
 const BOUNDARY = "flushed";
+
+/**
+ * 变更波及的范围，决定推进哪些版本计数器。编译产物按范围分别作废，改一处不必重算全部。
+ *
+ * - `shape` 结构变了（增删节点与边、改端口、改层级、压缩）——CSR 与两条权重数组全部作废
+ * - `weight` 只有边权变了——CSR 与点权数组仍可原样复用
+ * - `cost` 只有点权变了——CSR 与边权数组仍可原样复用
+ */
+export type Scope = "shape" | "weight" | "cost";
 
 /**
  * 一段可嵌套事务里的变更与事件。
@@ -26,7 +29,7 @@ const BOUNDARY = "flushed";
  * 连载荷都不构造。{@link Journal.commit} 在事务外立刻派发，在 {@link Journal.batch} 内
  * 则攒到最外层结束。
  */
-export class Journal<E extends object & { flushed: Flushed }> {
+export class Journal<E extends object & { flushed: { changes: number } }> {
   /**
    * 变更事件总线。
    *
@@ -43,6 +46,8 @@ export class Journal<E extends object & { flushed: Flushed }> {
 
   private _revision = 0;
   private _shape = 0;
+  private _weights = 0;
+  private _costs = 0;
   private _depth = 0;
   private _changes = 0;
   private _settling = false;
@@ -56,9 +61,19 @@ export class Journal<E extends object & { flushed: Flushed }> {
     return this._revision;
   }
 
-  /** 只有 `shape` 为真的变更才推进。 */
+  /** 只有 `shape` 范围的变更才推进。 */
   public get shape(): number {
     return this._shape;
+  }
+
+  /** 边权可能变了；`shape` 范围的变更一并推进它，因此单看它就够判断边权数组是否作废。 */
+  public get weights(): number {
+    return this._weights;
+  }
+
+  /** 点权可能变了，语义同 {@link Journal.weights}。 */
+  public get costs(): number {
+    return this._costs;
   }
 
   /**
@@ -67,11 +82,13 @@ export class Journal<E extends object & { flushed: Flushed }> {
    * @remarks 返回 `false` 时调用方连载荷对象都不构造，于是无人订阅的变更热路径零分配。
    *   批量导入几万条变更时，这决定了事务里是空的还是堆着几万个载荷。
    *
-   *   漏调不会报错，但版本号停在旧值，据它判断"结构没变"的缓存会静默过期。
+   *   漏调不会报错，但版本号停在旧值，据它判断"没变"的缓存会静默过期。
    */
-  public mark<K extends EventType<E>>(type: K, shape: boolean): boolean {
+  public mark<K extends EventType<E>>(type: K, scope: Scope): boolean {
     this._revision++;
-    if (shape) this._shape++;
+    if (scope !== "cost") this._weights++;
+    if (scope !== "weight") this._costs++;
+    if (scope === "shape") this._shape++;
     this._changes++;
     return this._heard(type);
   }

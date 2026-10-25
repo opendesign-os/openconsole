@@ -7,6 +7,7 @@ import {
   type GraphId,
   type NodeId,
 } from "../ident";
+import { Interner } from "../slots";
 import { builtins, type Socket } from "../socket";
 import { Port, type Constraints } from "../vertex";
 
@@ -90,23 +91,8 @@ export interface UnpackOptions<N, E> {
    *   并写入了一半。要么先对 bundle 做一次试还原，要么自备恢复手段。
    */
   into?: Graph<N, E>;
-  /** intern 过的数据默认还原成原始 id；置真则保留短 id。 */
-  keepShortIds?: boolean;
-}
-
-/** 按首次出现顺序把 id 折算成短整数；品牌化交给 {@link nodeId} / {@link edgeId}。 */
-class Interner {
-  public readonly table: string[] = [];
-  private readonly _seen = new Map<string, string>();
-
-  public map(id: string): string {
-    const known = this._seen.get(id);
-    if (known !== undefined) return known;
-    const short = String(this.table.length);
-    this._seen.set(id, short);
-    this.table.push(id);
-    return short;
-  }
+  /** 把 intern 过的短 id 还原成原始 id，默认开启；关掉则原样保留短 id。 */
+  revive?: boolean;
 }
 
 /** 端口表 → 紧凑元组，按名称排序以便直接比较两份结构。 */
@@ -207,9 +193,9 @@ export function pack<N, E>(
   const nodeIds = new Interner();
   const edgeIds = new Interner();
   const mapNode = (id: NodeId): NodeId =>
-    intern ? nodeId(nodeIds.map(id)) : id;
+    intern ? nodeId(String(nodeIds.of(id))) : id;
   const mapEdge = (id: EdgeId): EdgeId =>
-    intern ? edgeId(edgeIds.map(id)) : id;
+    intern ? edgeId(String(edgeIds.of(id))) : id;
 
   // 全图扫描一律走 forEach* 快路径：按存储顺序直读平行数组，省掉每个元素一次 id 查表。
   const n: Array<CompactNode<N>> = [];
@@ -279,7 +265,7 @@ export function unpack<N, E>(
     );
   }
 
-  const revive = ids && options.keepShortIds !== true;
+  const revive = ids && options.revive !== false;
   const node = (id: NodeId): NodeId =>
     revive ? nodeId(original(ids.nodes, id, "node")) : id;
   const edge = (id: EdgeId): EdgeId =>

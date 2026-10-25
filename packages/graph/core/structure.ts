@@ -9,7 +9,7 @@
  * @packageDocumentation
  */
 
-import type { Ints, Reals } from "./array";
+import { adjacency, flip, reals, type Arcs, type Ints, type Reals } from "./array";
 import { Invalid, Oneway, Oversized } from "./error";
 
 /**
@@ -26,9 +26,9 @@ export interface Adjacency {
 }
 
 /**
- * **算法的输入契约**：索引空间的邻接读取，五个只读字段，全是纯数据。
+ * **算法的输入契约**：索引空间的邻接读取，六个只读字段，全是纯数据。
  *
- * 算法一律面向这个接口而不是 {@link Snapshot} 类，因此凡是能凑出这五个字段的东西都能
+ * 算法一律面向这个接口而不是 {@link Snapshot} 类，因此凡是能凑出这六个字段的东西都能
  * 直接跑全套算法——SharedArrayBuffer 背书的邻接、WASM 里导出的 CSR、按规则生成而非
  * 存储的图、别的库编译出的结果，都不必先塞进 `Graph` 再编译一遍。
  *
@@ -40,6 +40,7 @@ export interface Adjacency {
  *   outbound: { offset: Int32Array.of(0, 1, 2, 2), other: Int32Array.of(1, 2), edge: Int32Array.of(0, 1) },
  *   inbound: { offset: Int32Array.of(0, 0, 1, 2), other: Int32Array.of(0, 1), edge: Int32Array.of(0, 1) },
  *   weight: Float64Array.of(3, 4),
+ *   cost: undefined,
  * };
  * settle(toposort(chain)); // Int32Array [0, 1, 2]
  * ```
@@ -50,13 +51,24 @@ export interface Structure {
   readonly outbound: Adjacency;
   /** 没有入向邻接时为 `undefined`；与 `outbound` 同一个对象则表示按无向编译。 */
   readonly inbound: Adjacency | undefined;
-  /** 边序号 → 权重；`undefined` 表示无权，全部边按 1 计。 */
+  /** 边序号 → 边权；`undefined` 表示无边权，全部边按 1 计。 */
   readonly weight: Reals | undefined;
+  /**
+   * 节点索引 → 点权；`undefined` 表示无点权，全部节点按 0 计。
+   *
+   * @remarks 节点自身的代价摊不进边权——扇入大于 1 时会被重复计数——所以它要自己一条
+   *   数组。编排 DAG 的关键路径（节点有执行耗时）、带点权的调度与覆盖问题都用它。
+   */
+  readonly cost: Reals | undefined;
 }
 
-/** 边序号对应的代价；未编译权重时恒为 1。热循环里请把 `weight` 提到循环外直读。 */
-export const costOf = (structure: Structure, edge: number): number =>
+/** 边序号对应的边权；未编译边权时恒为 1。热循环里请把 `weight` 提到循环外直读。 */
+export const weightOf = (structure: Structure, edge: number): number =>
   structure.weight ? structure.weight[edge]! : 1;
+
+/** 节点索引对应的点权；未编译点权时恒为 0。 */
+export const costOf = (structure: Structure, node: number): number =>
+  structure.cost ? structure.cost[node]! : 0;
 
 /** 入向与出向是同一份邻接（无向编译），把它当无向图看时无需再扫反向。 */
 export const merged = (structure: Structure): boolean =>
@@ -101,8 +113,91 @@ export function reversed(structure: Structure): Structure {
     outbound: back,
     inbound: structure.outbound,
     weight: structure.weight,
+    cost: structure.cost,
   };
 }
+
+/**
+ * 索引子集视图：只保留 `keep` 里的节点，以及两端都在其中的边。
+ *
+ * 产出活在**子集索引空间**里：子集节点 `i` 对应原结构的 `keep[i]`，子集边序号 `e` 对应
+ * {@link Subset.edges}`[e]`；边权与点权都已按新序号重排，因此它就是个普通 {@link Structure}，
+ * 全套算法照常跑。
+ *
+ * @remarks 这是"契约是接口而不是类"的红利：凑出六个字段就是一个合法结构，不必回
+ *   {@link Graph} 重编一份快照。构造是 O(保留规模)，而编译一份过滤快照是 O(V+E)——
+ *   按分组逐个算时差一个数量级。无向结构里一条边在两端各出现一次，这里按原边序号去重。
+ *
+ * @example 只看某个分组内部的拓扑序
+ * ```ts
+ * const inside = subset(snapshot, Int32Array.from(members));
+ * snapshot.names(settle(toposort(inside)).map((i) => members[i]));
+ * ```
+ */
+export interface Subset extends Structure {
+  /** 子集边序号 → 原结构的边序号；回查边 id 用。 */
+  readonly edges: Ints;
+}
+
+export function subset(structure: Structure, keep: Ints): Subset {
+  const order = keep.length;
+  const place = new Int32Array(structure.order).fill(-1);
+  for (let i = 0; i < order; i++) place[keep[i]!] = i;
+
+  const out = structure.outbound;
+  const undirected = merged(structure);
+  // 无向结构的一条边在两端各出现一次，只认首次遇到的那次。
+  const taken = undirected ? new Uint8Array(structure.size) : undefined;
+  const tail: number[] = [];
+  const head: number[] = [];
+  const origin: number[] = [];
+
+  for (let i = 0; i < order; i++) {
+    const u = keep[i]!;
+    for (let k = out.offset[u]!; k < out.offset[u + 1]!; k++) {
+      const v = place[out.other[k]!]!;
+      if (v < 0) continue;
+      const e = out.edge[k]!;
+      if (taken !== undefined) {
+        if (taken[e] === 1) continue;
+        taken[e] = 1;
+      }
+      tail.push(i);
+      head.push(v);
+      origin.push(e);
+    }
+  }
+
+  const arcs: Arcs = {
+    tail: Int32Array.from(tail),
+    head: Int32Array.from(head),
+    count: origin.length,
+  };
+  const outbound = adjacency(order, arcs, undirected);
+  const edges = Int32Array.from(origin);
+  return {
+    order,
+    size: arcs.count,
+    outbound,
+    inbound:
+      structure.inbound === undefined
+        ? undefined
+        : undirected
+          ? outbound
+          : adjacency(order, flip(arcs), false),
+    weight: select(structure.weight, edges),
+    cost: select(structure.cost, keep),
+    edges,
+  };
+}
+
+/** 按索引数组挑出一份新的实数数组。 */
+const select = (from: Reals | undefined, index: Ints): Reals | undefined => {
+  if (from === undefined) return undefined;
+  const found = reals(index.length);
+  for (let i = 0; i < index.length; i++) found[i] = from[index[i]!]!;
+  return found;
+};
 
 export const outDegree = (structure: Structure, u: number): number =>
   structure.outbound.offset[u + 1]! - structure.outbound.offset[u]!;
@@ -180,8 +275,7 @@ const profiles = new WeakMap<Reals | Structure, Profile>();
 /**
  * 边权画像，按权重数组记忆化。
  *
- * @throws {@link Invalid} 存在 `NaN` 权边——这一遍本来就要走完，顺手拦下是零成本；
- *   放过去就是一个查不出的"不可达"
+ * @throws {@link Invalid} 存在 `NaN` 权边——这一遍本来就要走完，顺手拦下是零成本
  */
 export function profileOf(structure: Structure): Profile {
   const weight = structure.weight;
@@ -216,7 +310,7 @@ export function profileOf(structure: Structure): Profile {
  *
  * @throws {@link Invalid} 存在 `NaN` 权边
  */
-export function costs(structure: Structure): Reals | undefined {
+export function weights(structure: Structure): Reals | undefined {
   profileOf(structure);
   return structure.weight;
 }

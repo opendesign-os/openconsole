@@ -5,13 +5,13 @@ import { Cycle, Invalid, Negative } from "../error";
 import {
   afford,
   CEILING,
-  costs,
+  weights,
   profileOf,
   reversed,
   type DenseOptions,
   type Structure,
 } from "../structure";
-import { Stepwise, transform, type Task } from "../task";
+import { Stepwise, type Task } from "../task";
 
 /**
  * 路径代价的合成方式。Dijkstra 的贪心要求 `combine(total, step) >= total`，
@@ -44,11 +44,16 @@ export interface PathOptions {
   combine?: Combine;
 }
 
+export interface AstarOptions extends PathOptions {
+  /** 到终点的剩余代价估计；不高估真实代价时结果最优。省略即退化成 Dijkstra。 */
+  heuristic?: (node: number) => number;
+}
+
 /** 桶队列的最大边权上限：路径总长随它增长，空桶扫描是 O(总长) 的实打实开销。 */
 const BUCKETS = 1 << 8;
 
 /**
- * 逐边现取边权并校验。提前终止型的搜索走这条路而不是 {@link costs} 的一次性预扫——
+ * 逐边现取边权并校验。提前终止型的搜索走这条路而不是 {@link weights} 的一次性预扫——
  * 它们只探索一小片图，预扫全部边权往往比实际访问到的边还多。
  *
  * @throws {@link Invalid} `NaN` 权边
@@ -100,7 +105,6 @@ class Dijkstra extends Stepwise<Tree> {
   public constructor(
     private readonly _structure: Structure,
     source: number,
-    private readonly _target: number,
     private readonly _combine: Combine,
   ) {
     super();
@@ -133,7 +137,6 @@ class Dijkstra extends Stepwise<Tree> {
     if (this._closed[u] === 1) return true;
     this._closed[u] = 1;
     this._reached++;
-    if (u === this._target) return false;
 
     const { offset, other, edge } = this._structure.outbound;
     const weight = this._weight;
@@ -167,27 +170,7 @@ export const shortestPaths = (
   structure: Structure,
   source: number,
   options: PathOptions = {},
-): Task<Tree> => new Dijkstra(structure, source, -1, options.combine ?? sum);
-
-/**
- * 单条最短路。摸到终点即停，因此**只**给出这一条路线——不返回路径树，
- * 避免把提前终止时尚未收敛的距离误当最短值使用。
- */
-export const shortestPath = (
-  structure: Structure,
-  source: number,
-  target: number,
-  options: PathOptions = {},
-): Task<Route | undefined> =>
-  transform(
-    new Dijkstra(structure, source, target, options.combine ?? sum),
-    (tree) =>
-      target < 0 ||
-      target >= structure.order ||
-      tree.distance[target] === Infinity
-        ? undefined
-        : { distance: tree.distance[target]!, path: trace(tree, target) },
-  );
+): Task<Tree> => new Dijkstra(structure, source, options.combine ?? sum);
 
 /** 沿前驱链重建路径；目标越界或不可达返回空数组。 */
 export function trace(tree: Tree, target: number): Int32Array {
@@ -273,14 +256,37 @@ class AStar extends Stepwise<Route | undefined> {
   }
 }
 
+const blind = (): number => 0;
+
 export const astar = (
   structure: Structure,
   source: number,
   target: number,
-  heuristic: (node: number) => number = () => 0,
+  options: AstarOptions = {},
+): Task<Route | undefined> =>
+  new AStar(
+    structure,
+    source,
+    target,
+    options.heuristic ?? blind,
+    options.combine ?? sum,
+  );
+
+/**
+ * 单条最短路。摸到终点即停，因此**只**给出这一条路线——不返回路径树，
+ * 避免把提前终止时尚未收敛的距离误当最短值使用。
+ *
+ * @remarks 就是不带启发式的 {@link astar}，因此与它共用同一套提前终止的机器：
+ *   逐边现取现验，而不是入口处预扫一遍全部边权。点对点查询只探索一小片图，
+ *   预扫往往比实际访问到的边还多——那正是 {@link shortestPaths} 才划算的事。
+ */
+export const shortestPath = (
+  structure: Structure,
+  source: number,
+  target: number,
   options: PathOptions = {},
 ): Task<Route | undefined> =>
-  new AStar(structure, source, target, heuristic, options.combine ?? sum);
+  new AStar(structure, source, target, blind, options.combine ?? sum);
 
 interface Side {
   readonly distance: Float64Array;
@@ -429,7 +435,7 @@ class BellmanFord extends Stepwise<Tree> {
     super();
     this._distance = new Float64Array(_structure.order).fill(Infinity);
     this._parent = new Int32Array(_structure.order).fill(-1);
-    this._weight = costs(_structure);
+    this._weight = weights(_structure);
     if (source >= 0 && source < _structure.order) this._distance[source] = 0;
   }
 
@@ -542,7 +548,7 @@ class FloydWarshall extends Stepwise<Matrix> {
     const n = _structure.order;
     afford(8 * n * n, limit, `floydWarshall on V=${n}`);
     this._cells = new Float64Array(n * n);
-    this._weight = costs(_structure);
+    this._weight = weights(_structure);
   }
 
   protected measure(): number {

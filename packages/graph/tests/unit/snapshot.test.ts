@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  costOf,
   Graph,
   graphId,
   inDegree,
@@ -19,8 +18,10 @@ import {
   Stale,
   toposort,
   Vertex,
+  weightOf,
   type NodeId,
   type Sockets,
+  type Wire,
 } from "../../index";
 import { cost, outOf, randomGraph, vertex, weighted } from "../support";
 
@@ -39,16 +40,21 @@ function router(): Graph<number, number> {
   return graph;
 }
 
+/** 端口层：两条标注都只从接线上取，因此不随权重变动。 */
+const PORTS = {
+  source: (wire: Wire): string => wire.sourcePort,
+  target: (wire: Wire): string => wire.targetPort,
+};
+
 /** 从 `u` 沿指定引脚走出去的全部目标，全程在索引空间。 */
 function branch(snapshot: Snapshot, node: NodeId, port: string): NodeId[] {
   const u = snapshot.indexOf(node);
-  const pin = snapshot.portOf(port);
+  const pin = snapshot.code(port);
+  const source = snapshot.layer("source");
   const { offset, other, edge } = snapshot.outbound;
   const found: NodeId[] = [];
   for (let k = offset[u]!; k < offset[u + 1]!; k++) {
-    if (snapshot.sourcePort![edge[k]!] === pin) {
-      found.push(snapshot.label(other[k]!));
-    }
+    if (source[edge[k]!] === pin) found.push(snapshot.node(other[k]!));
   }
   return found.sort();
 }
@@ -76,7 +82,7 @@ describe("编译", () => {
     const snapshot = Snapshot.of(graph);
 
     expect(snapshot.order).toBe(graph.order);
-    expect(snapshot.labels.every((id) => graph.hasNode(id))).toBe(true);
+    expect(snapshot.nodes.every((id) => graph.hasNode(id))).toBe(true);
   });
 
   it("平行边各有独立权重", () => {
@@ -91,7 +97,7 @@ describe("编译", () => {
     const u = snapshot.indexOf(nodeId("a"));
     const weights: number[] = [];
     for (let k = offset[u]!; k < offset[u + 1]!; k++) {
-      weights.push(costOf(snapshot, edge[k]!));
+      weights.push(weightOf(snapshot, edge[k]!));
     }
     expect(weights.sort()).toEqual([3, 7]);
   });
@@ -108,7 +114,7 @@ describe("编译", () => {
   it("未编译权重时每条边按 1 计", () => {
     const snapshot = Snapshot.of(randomGraph(23, { order: 10, density: 2 }));
     expect(snapshot.weight).toBeUndefined();
-    expect(costOf(snapshot, 0)).toBe(1);
+    expect(weightOf(snapshot, 0)).toBe(1);
   });
 });
 
@@ -119,8 +125,8 @@ describe("编译期视图", () => {
       Number(String(node).slice(1)) % 2 === 0;
     const snapshot = Snapshot.of(graph, { node: keep });
 
-    expect(snapshot.labels.every(keep)).toBe(true);
-    for (const node of snapshot.labels) {
+    expect(snapshot.nodes.every(keep)).toBe(true);
+    for (const node of snapshot.nodes) {
       expect(outOf(snapshot, node)).toEqual(
         graph.outNeighbors(node).filter(keep).slice().sort(),
       );
@@ -149,7 +155,7 @@ describe("编译期视图", () => {
     graph.connect([nodeId("y"), "out"], [nodeId("outside"), "in"]);
 
     const snapshot = Snapshot.of(graph, { collapse: [nodeId("group")] });
-    expect(new Set(snapshot.labels)).toEqual(
+    expect(new Set(snapshot.nodes)).toEqual(
       new Set([nodeId("group"), nodeId("outside")]),
     );
     expect(outOf(snapshot, nodeId("group"))).toEqual([nodeId("outside")]);
@@ -230,7 +236,7 @@ describe("跨线程搬运", () => {
 
     expect(revived.order).toBe(snapshot.order);
     expect(revived.size).toBe(snapshot.size);
-    expect([...revived.labels]).toEqual([...snapshot.labels]);
+    expect([...revived.nodes]).toEqual([...snapshot.nodes]);
     expect([...revived.weight!]).toEqual([...snapshot.weight!]);
     for (const node of graph.nodes()) {
       expect(outOf(revived, node)).toEqual(outOf(snapshot, node));
@@ -250,7 +256,7 @@ describe("跨线程搬运", () => {
     ]);
     expect(revived.at(0)).toBeUndefined();
     expect(revived.indexOf(graph.nodes()[0]!)).toBe(-1);
-    expect(() => revived.names([0])).toThrow(/without labels/);
+    expect(() => revived.names([0])).toThrow(/without the label layer/);
   });
 
   /**
@@ -268,7 +274,7 @@ describe("跨线程搬运", () => {
     expect(again.size).toBe(snapshot.size);
     expect(settle(scc(again)).count).toBe(settle(scc(snapshot)).count);
     // 转发一跳后依然是"没有标签层"的快照，语义不变。
-    expect(() => again.names([0])).toThrow(/without labels/);
+    expect(() => again.names([0])).toThrow(/without the label layer/);
   });
 });
 
@@ -276,10 +282,45 @@ describe("增量重编译", () => {
   const build = (): Graph<number, number> =>
     randomGraph(89, { order: 200, density: 3 });
 
+  /** 点权回调要提成稳定引用，否则每次调用都换了语义，按引用判同必然重算。 */
+  const price = (weight: number | undefined): number => weight ?? 0;
+
   it("什么都没变时原样返回同一个快照", () => {
     const graph = build();
     const base = weighted(graph);
     expect(Snapshot.of(graph, { weight: cost, reuse: base })).toBe(base);
+  });
+
+  it("改节点参数不牵动边权数组——编辑器里最频繁的那类变更", () => {
+    const graph = build();
+    const base = weighted(graph);
+    graph.setWeight(graph.nodes()[0]!, 42);
+
+    const next = Snapshot.of(graph, { weight: cost, reuse: base });
+    // 图确实变了，快照得跟上 revision，否则 verify() 会误报陈旧。
+    expect(next).not.toBe(base);
+    expect(next.revision).toBe(graph.revision);
+    expect(next.current).toBe(true);
+    // 但边权一条都没重算：整份原样复用，O(1) 而不是 O(E)。
+    expect(next.weight).toBe(base.weight);
+    expect(next.outbound).toBe(base.outbound);
+    expect(next.nodes).toBe(base.nodes);
+  });
+
+  it("改边权不牵动点权数组，两条各自作废", () => {
+    const graph = build();
+    const options = { weight: cost, cost: price };
+    const base = Snapshot.of(graph, options);
+    graph.setEdgeWeight(graph.edges()[0]!, 999);
+
+    const next = Snapshot.of(graph, { ...options, reuse: base });
+    expect(next.weight).not.toBe(base.weight);
+    expect(next.cost).toBe(base.cost);
+
+    graph.setWeight(graph.nodes()[0]!, 7);
+    const third = Snapshot.of(graph, { ...options, reuse: next });
+    expect(third.cost).not.toBe(next.cost);
+    expect(third.weight).toBe(next.weight);
   });
 
   it("只动权重时复用 CSR，只重算权重数组", () => {
@@ -292,7 +333,7 @@ describe("增量重编译", () => {
     expect(next).not.toBe(base);
     expect(next.outbound).toBe(base.outbound);
     expect(next.inbound).toBe(base.inbound);
-    expect(next.labels).toBe(base.labels);
+    expect(next.nodes).toBe(base.nodes);
     expect(next.edges).toBe(base.edges);
     expect(next.weight).not.toBe(base.weight);
     expect(next.current).toBe(true);
@@ -542,7 +583,7 @@ describe("搬运数据的形状校验", () => {
       Snapshot.from({ ...data, weight: new Float64Array(1) }),
     ).toThrow(Schema);
     expect(() =>
-      Snapshot.from({ ...data, labels: data.labels!.slice(0, 1) }),
+      Snapshot.from({ ...data, nodes: data.nodes!.slice(0, 1) }),
     ).toThrow(Schema);
     expect(() =>
       Snapshot.from({ ...data, edges: data.edges!.slice(0, 1) }),
@@ -571,11 +612,18 @@ describe("对源图的弱引用", () => {
    * 快照常常活得比源图久（缓存在算法层、挂在 UI 状态上）。强引用会把整张图连同全部端口
    * 对象一起钉住——快照自身可能只有几百 KB，钉住的图却是它的几十倍。
    */
-  const collect = async (): Promise<void> => {
+  /**
+   * 反复让出再触发 GC，直到 `watch` 真的空掉。单次 `gc()` 不保证收走刚失去引用的对象
+   * （年轻代还没晋升、栈上仍可能残留引用），只跑一轮会间歇性误报。
+   */
+  const collect = async (watch?: WeakRef<object>): Promise<void> => {
     const gc = (globalThis as { gc?: () => void }).gc;
     expect(gc, "需要 --expose-gc，见 vitest.config.ts").toBeDefined();
-    await new Promise((resume) => setTimeout(resume, 0));
-    gc!();
+    for (let round = 0; round < 10; round++) {
+      await new Promise((resume) => setTimeout(resume, 0));
+      gc!();
+      if (watch?.deref() === undefined) return;
+    }
   };
 
   it("源图还活着时，陈旧判定照常", () => {
@@ -597,7 +645,7 @@ describe("对源图的弱引用", () => {
     const watch = new WeakRef(graph);
 
     graph = undefined;
-    await collect();
+    await collect(watch);
 
     expect(watch.deref()).toBeUndefined();
     // 快照自身完好，索引空间的一切照常。
@@ -637,17 +685,27 @@ describe("对源图的弱引用", () => {
   });
 });
 
-describe("端口层", () => {
+describe("标注层", () => {
   it("默认不编译——不付这份代价的人不该看见它", () => {
     const snapshot = Snapshot.of(router());
-    expect(snapshot.sourcePort).toBeUndefined();
-    expect(snapshot.ports).toEqual([]);
-    // 静默给空会让"这条边没接在任何引脚上"和"你没编译端口"分不开。
-    expect(() => snapshot.sourcePortAt(0)).toThrow(/ports: true/);
+    expect(snapshot.layers).toEqual({});
+    expect(snapshot.words).toEqual([]);
+    // 静默给空会让"这条边没接在任何引脚上"和"你没编译这一层"分不开。
+    expect(() => snapshot.layer("source")).toThrow(/was not compiled/);
+  });
+
+  it("层名自取，不止端口——内核不认识「端口」这个概念", () => {
+    const snapshot = Snapshot.of(router(), {
+      layer: { kind: (wire) => (wire.sourcePort === "yes" ? "then" : "else") },
+    });
+    const kind = snapshot.layer("kind");
+    expect([...snapshot.words].sort()).toEqual(["else", "then"]);
+    expect(snapshot.word(kind[0]!)).toBe("then");
+    expect(() => snapshot.layer("source")).toThrow(/was not compiled/);
   });
 
   it("编译后能在索引空间按引脚分派分支", () => {
-    const snapshot = Snapshot.of(router(), { ports: true });
+    const snapshot = Snapshot.of(router(), { layer: PORTS });
     expect(branch(snapshot, nodeId("a"), "yes")).toEqual([nodeId("b")]);
     expect(branch(snapshot, nodeId("a"), "no")).toEqual([nodeId("c")]);
     expect(branch(snapshot, nodeId("b"), "yes")).toEqual([]);
@@ -661,38 +719,38 @@ describe("端口层", () => {
       // `yes` 是 multiple:false，扇出走 `no` 之外的一条：这里让每个目标各连一次 in。
       graph.connect([nodeId(`n${i}`), "yes"], [nodeId("hub"), "in"]);
     }
-    const snapshot = Snapshot.of(graph, { ports: true });
+    const snapshot = Snapshot.of(graph, { layer: PORTS });
     expect(snapshot.size).toBe(50);
     // 50 条边，只用到 `yes` 与 `in` 两个名字。
-    expect([...snapshot.ports].sort()).toEqual(["in", "yes"]);
-    expect(snapshot.portOf("nope")).toBe(-1);
+    expect([...snapshot.words].sort()).toEqual(["in", "yes"]);
+    expect(snapshot.code("nope")).toBe(-1);
   });
 
   it("每条边的两端各记各的", () => {
-    const snapshot = Snapshot.of(router(), { ports: true });
+    const snapshot = Snapshot.of(router(), { layer: PORTS });
     for (let e = 0; e < snapshot.size; e++) {
       const record = router().edge(snapshot.edges[e]!)!;
-      expect(snapshot.sourcePortAt(e)).toBe(record.sourcePort);
-      expect(snapshot.targetPortAt(e)).toBe(record.targetPort);
+      expect(snapshot.word(snapshot.layer("source")[e]!)).toBe(record.sourcePort);
+      expect(snapshot.word(snapshot.layer("target")[e]!)).toBe(record.targetPort);
     }
   });
 
-  it("端口层跟着 core 走，Worker 侧拿得到引脚名", () => {
-    const snapshot = Snapshot.of(router(), { ports: true });
-    // core 刻意不带 O(V)/O(E) 的 id 标签，但端口层要留下：编号是 typed-array，
+  it("标注层跟着 core 走，Worker 侧拿得到引脚名", () => {
+    const snapshot = Snapshot.of(router(), { layer: PORTS });
+    // core 刻意不带 O(V)/O(E) 的 id 标签，但标注层要留下：编号是 typed-array，
     // 名字表的长度是引脚种类数。
     const revived = Snapshot.from(structuredClone(snapshot.core));
-    expect(revived.labels).toEqual([]);
-    expect(revived.sourcePortAt(0)).toBe("yes");
-    expect(revived.portOf("no")).toBe(snapshot.portOf("no"));
+    expect(revived.nodes).toEqual([]);
+    expect(revived.word(revived.layer("source")[0]!)).toBe("yes");
+    expect(revived.code("no")).toBe(snapshot.code("no"));
   });
 
   it("翻转方向不动端口——端口属于边，不属于方向", () => {
-    const snapshot = Snapshot.of(router(), { ports: true });
+    const snapshot = Snapshot.of(router(), { layer: PORTS });
     const back = snapshot.reverse();
     for (let e = 0; e < snapshot.size; e++) {
-      expect(back.sourcePortAt(e)).toBe(snapshot.sourcePortAt(e));
-      expect(back.targetPortAt(e)).toBe(snapshot.targetPortAt(e));
+      expect(back.word(back.layer("source")[e]!)).toBe(snapshot.word(snapshot.layer("source")[e]!));
+      expect(back.word(back.layer("target")[e]!)).toBe(snapshot.word(snapshot.layer("target")[e]!));
     }
   });
 
@@ -705,13 +763,13 @@ describe("端口层", () => {
     graph.connect([nodeId("a"), "no"], [nodeId("b"), "in"], { weight: 2 });
 
     const snapshot = Snapshot.of(graph, {
-      ports: true,
+      layer: PORTS,
       weight: (w) => w ?? 1,
       merge: Math.min,
     });
     expect(snapshot.size).toBe(1);
     expect(snapshot.edges[0]).toBe(first);
-    expect(snapshot.sourcePortAt(0)).toBe("yes");
+    expect(snapshot.word(snapshot.layer("source")[0]!)).toBe("yes");
     expect(snapshot.weight![0]).toBe(2);
   });
 
@@ -721,55 +779,58 @@ describe("端口层", () => {
     graph.setParent(nodeId("b"), nodeId("box"));
 
     const snapshot = Snapshot.of(graph, {
-      ports: true,
+      layer: PORTS,
       collapse: [nodeId("box")],
     });
     // a --yes--> b 被抬到 box 上，引脚名不变。
     expect(branch(snapshot, nodeId("a"), "yes")).toEqual([nodeId("box")]);
   });
 
-  it("增量重编译复用端口层，只重算权重", () => {
+  it("增量重编译复用标注层，只重算权重", () => {
     const graph = router();
     graph.setEdgeWeight(graph.edges()[0]!, 3);
-    const first = Snapshot.of(graph, { ports: true, weight: (w) => w ?? 1 });
+    const first = Snapshot.of(graph, { layer: PORTS, weight: (w) => w ?? 1 });
     graph.setEdgeWeight(graph.edges()[0]!, 9);
     const second = Snapshot.of(graph, {
-      ports: true,
+      layer: PORTS,
       weight: (w) => w ?? 1,
       reuse: first,
     });
 
     expect(second).not.toBe(first);
     expect(second.outbound).toBe(first.outbound);
-    expect(second.sourcePort).toBe(first.sourcePort);
-    expect(second.ports).toBe(first.ports);
+    expect(second.layer("source")).toBe(first.layer("source"));
+    expect(second.words).toBe(first.words);
     expect(second.weight![0]).toBe(9);
   });
 
-  it("配方不一致时不复用——否则会拿到一份没有端口的快照", () => {
+  it("配方不一致时不复用——否则会拿到一份没有标注层的快照", () => {
     const graph = router();
     const bare = Snapshot.of(graph);
-    const withPorts = Snapshot.of(graph, { ports: true, reuse: bare });
-    expect(withPorts.sourcePort).toBeDefined();
+    const withPorts = Snapshot.of(graph, { layer: PORTS, reuse: bare });
+    expect(() => withPorts.layer("source")).not.toThrow();
   });
 });
 
 describe("搬运数据的校验", () => {
-  const sample = (): Snapshot => Snapshot.of(router(), { ports: true });
+  const sample = (): Snapshot => Snapshot.of(router(), { layer: PORTS });
 
-  it("端口编号越出名字表时报错", () => {
+  it("标注编号越出名字表时报错", () => {
     const data = sample().core;
-    const broken = Int32Array.from(data.sourcePort!);
+    const broken = Int32Array.from(data.layers!.source!);
     broken[0] = 99;
-    expect(() => Snapshot.from({ ...data, sourcePort: broken })).toThrow(
-      Schema,
-    );
+    expect(() =>
+      Snapshot.from({ ...data, layers: { ...data.layers, source: broken } }),
+    ).toThrow(Schema);
   });
 
-  it("端口编号数组长度与边数对不上时报错", () => {
+  it("标注编号数组长度与边数对不上时报错", () => {
     const data = sample().core;
     expect(() =>
-      Snapshot.from({ ...data, sourcePort: Int32Array.of(0) }),
+      Snapshot.from({
+        ...data,
+        layers: { ...data.layers, source: Int32Array.of(0) },
+      }),
     ).toThrow(Schema);
   });
 

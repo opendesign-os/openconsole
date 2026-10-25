@@ -25,6 +25,83 @@ export interface Reals extends Iterable<number> {
   readonly [index: number]: number;
 }
 
+export const ints = (length: number, shared = false): Int32Array =>
+  shared
+    ? new Int32Array(new SharedArrayBuffer(4 * length))
+    : new Int32Array(length);
+
+export const reals = (length: number, shared = false): Float64Array =>
+  shared
+    ? new Float64Array(new SharedArrayBuffer(8 * length))
+    : new Float64Array(length);
+
+/** 弧表：两条平行数组加有效长度，弧的序号即数组下标。 */
+export interface Arcs {
+  /** 弧序号 → 源节点索引。 */
+  readonly tail: Int32Array;
+  /** 弧序号 → 目标节点索引。 */
+  readonly head: Int32Array;
+  readonly count: number;
+}
+
+/** 方向翻转的弧表视图，O(1)：底层数组共享，只是把两端对调。 */
+export const flip = (arcs: Arcs): Arcs => ({
+  tail: arcs.head,
+  head: arcs.tail,
+  count: arcs.count,
+});
+
+/** CSR 的三条数组。{@link Structure} 契约里的 `Adjacency` 是它的只读视图——同一份数据，
+ * 一个给构造方写、一个给算法读，关系与 `Int32Array` 对 {@link Ints} 一样。 */
+export interface Rows {
+  readonly offset: Int32Array;
+  readonly other: Int32Array;
+  readonly edge: Int32Array;
+}
+
+/**
+ * 按 `tail → head` 建 CSR；`both` 为真时每条弧在两端各出现一次（无向）。
+ *
+ * @remarks 计数与落位刻意写成裸循环而不是抽小函数：这两步是编译里最贵的单项，一旦包成
+ *   捕获四个数组的闭包就拿不到内联。编译器与 {@link Structure} 的子集视图共用它——
+ *   两处各写一遍，迟早会在自环或无向的边界上分叉。
+ */
+export function adjacency(
+  order: number,
+  arcs: Arcs,
+  both: boolean,
+  shared = false,
+): Rows {
+  const { tail, head, count } = arcs;
+  const offset = ints(order + 1, shared);
+  for (let e = 0; e < count; e++) {
+    const t = tail[e]!;
+    offset[t + 1] = offset[t + 1]! + 1;
+    const h = head[e]!;
+    if (both && h !== t) offset[h + 1] = offset[h + 1]! + 1;
+  }
+  for (let u = 0; u < order; u++) offset[u + 1] = offset[u + 1]! + offset[u]!;
+
+  const other = ints(offset[order]!, shared);
+  const edge = ints(offset[order]!, shared);
+  const cursor = Int32Array.from(offset.subarray(0, order));
+  for (let e = 0; e < count; e++) {
+    const t = tail[e]!;
+    const h = head[e]!;
+    let slot = cursor[t]!;
+    cursor[t] = slot + 1;
+    other[slot] = h;
+    edge[slot] = e;
+    if (both && h !== t) {
+      slot = cursor[h]!;
+      cursor[h] = slot + 1;
+      other[slot] = t;
+      edge[slot] = e;
+    }
+  }
+  return { offset, other, edge };
+}
+
 /**
  * 从 `from` 起找第一个仍是 `blank` 的槽位；全部访问过则返回 `marks.length`。
  * 逐个分量铺开搜索的算法用它挑下一个起点。

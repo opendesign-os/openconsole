@@ -1,6 +1,11 @@
 import type { EdgeId, NodeId } from "./ident";
-import type { Flushed } from "./journal";
 import type { Ports } from "./vertex";
+
+/** 事务边界事件的载荷。 */
+export interface Flushed {
+  /** 本次事务里的变更条数。 */
+  changes: number;
+}
 
 /**
  * 图的变更事件。载荷是值快照而非活对象，因此在事务中缓冲、稍后派发也不会读到已失效的状态。

@@ -59,7 +59,7 @@ describe("跨线程搬运后结果不变", () => {
     expect([...bare.weight!]).toEqual([...origin.weight!]);
     expect(bare.at(0)).toBeUndefined();
     expect(bare.indexOf(nodeId("n0"))).toBe(-1);
-    expect(() => bare.names([0])).toThrow(/without labels/);
+    expect(() => bare.names([0])).toThrow(/without the label layer/);
   });
 
   it("搬过去的快照没有源图，因此不会误报陈旧", () => {

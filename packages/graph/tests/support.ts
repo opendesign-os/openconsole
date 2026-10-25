@@ -178,7 +178,7 @@ export function outOf(snapshot: Snapshot, node: NodeId): NodeId[] {
   const { offset, other } = snapshot.outbound;
   const found: NodeId[] = [];
   for (let k = offset[u]!; k < offset[u + 1]!; k++) {
-    found.push(snapshot.label(other[k]!));
+    found.push(snapshot.node(other[k]!));
   }
   return found.sort();
 }
