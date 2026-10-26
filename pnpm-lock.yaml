@@ -35,6 +35,25 @@ importers:
 
   configs/tsconfig: {}
 
+  packages/agent:
+    dependencies:
+      '@openconsole/graph':
+        specifier: workspace:*
+        version: link:../graph
+      '@openconsole/signal':
+        specifier: workspace:*
+        version: link:../signal
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      eventsource-parser:
+        specifier: ^3.1.0
+        version: 3.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+
   packages/atoms:
     dependencies:
       '@openconsole/shadcn':
