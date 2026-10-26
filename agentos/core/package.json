@@ -1,0 +1,39 @@
+{
+  "name": "@openagent/core",
+  "version": "0.0.1",
+  "private": true,
+  "description": "与模型无关的图运行时：只追加的 DAG 执行、Workflow、事件流、暂停与恢复、只追加的运行日志",
+  "license": "MIT",
+  "keywords": [
+    "agent",
+    "runtime",
+    "graph",
+    "dag",
+    "workflow",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cosmic-gao/openconsole.git",
+    "directory": "agentos/core"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc",
+    "check": "tsc && vitest run"
+  },
+  "dependencies": {
+    "@openconsole/graph": "workspace:*",
+    "@openconsole/signal": "workspace:*",
+    "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3"
+  }
+}

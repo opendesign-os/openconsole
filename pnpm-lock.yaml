@@ -33,19 +33,17 @@ importers:
         specifier: ^5.0.2
         version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.3)(@vitest/coverage-v8@5.0.2)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))
 
-  configs/tsconfig: {}
-
-  packages/agent:
+  agentos/agent:
     dependencies:
+      '@openagent/core':
+        specifier: workspace:*
+        version: link:../core
       '@openconsole/graph':
         specifier: workspace:*
-        version: link:../graph
-      '@openconsole/signal':
+        version: link:../../packages/graph
+      '@openconsole/plugable':
         specifier: workspace:*
-        version: link:../signal
-      ajv:
-        specifier: ^8.20.0
-        version: 8.20.0
+        version: link:../../packages/plugable
       eventsource-parser:
         specifier: ^3.1.0
         version: 3.1.0
@@ -53,6 +51,27 @@ importers:
       '@types/node':
         specifier: ^26.6.3
         version: 26.6.3
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+
+  agentos/core:
+    dependencies:
+      '@openconsole/graph':
+        specifier: workspace:*
+        version: link:../../packages/graph
+      '@openconsole/signal':
+        specifier: workspace:*
+        version: link:../../packages/signal
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+
+  configs/tsconfig: {}
 
   packages/atoms:
     dependencies:

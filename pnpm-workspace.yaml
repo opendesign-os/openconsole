@@ -2,6 +2,7 @@ packages:
   - "apps/**"
   - "configs/**"
   - "packages/**"
+  - "agentos/**"
 
 dangerouslyAllowAllBuilds: true
 engineStrict: true

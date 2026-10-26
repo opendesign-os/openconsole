@@ -1,0 +1,47 @@
+{
+  "name": "@openagent/agent",
+  "version": "0.0.1",
+  "private": true,
+  "description": "构建在 @openagent/core 之上的 agent 框架：Agent、插件、记忆图谱压缩、工作区与外环优化",
+  "license": "MIT",
+  "keywords": [
+    "agent",
+    "deepagent",
+    "harness",
+    "llm",
+    "openai",
+    "plugin",
+    "memory",
+    "knowledge-graph",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cosmic-gao/openconsole.git",
+    "directory": "agentos/agent"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./index.ts",
+    "./node": "./node.ts",
+    "./testing": "./testing.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc",
+    "check": "tsc && vitest run",
+    "example": "node --env-file-if-exists=.env --import tsx examples/chat.ts"
+  },
+  "dependencies": {
+    "@openagent/core": "workspace:*",
+    "@openconsole/graph": "workspace:*",
+    "@openconsole/plugable": "workspace:*",
+    "eventsource-parser": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15"
+  }
+}
