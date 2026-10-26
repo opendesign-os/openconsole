@@ -11,7 +11,7 @@ export class SqliteStore implements Store {
   public constructor(file: string) {
     this._database = new DatabaseSync(file);
     this._database.exec(
-      "CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (collection, key))",
+      "PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (collection, key))",
     );
   }
 
