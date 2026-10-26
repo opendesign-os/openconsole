@@ -1,0 +1,2223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>graph 内核原理</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Public+Sans:wght@400;500;600;700&display=swap">
+
+<style>
+  /* 算法手册：左侧常驻目录 + 单栏正文；等宽字体承担编号、数组与标签，青色只标「此刻在看的那一处」 */
+  :root {
+    --bg: #f4f7f7;
+    --surface: #ffffff;
+    --surface-sunk: #e9eeee;
+    --fg: #142120;
+    --fg-soft: #394b4a;
+    --muted: #627574;
+    --line: #d6dfde;
+    --line-strong: #b9c6c5;
+    --accent: #00707d;
+    --accent-soft: #ddeff0;
+    --warm: #a8471f;
+    --warm-soft: #f6e8e1;
+    --good: #1d6b45;
+    --good-soft: #e1f0e7;
+    --bad: #a32f2f;
+    --bad-soft: #f8e5e5;
+
+    --font-sans: "Public Sans", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1312;
+      --surface: #131c1b;
+      --surface-sunk: #192423;
+      --fg: #dfe8e7;
+      --fg-soft: #bccac8;
+      --muted: #829593;
+      --line: #22302f;
+      --line-strong: #334341;
+      --accent: #3fa8b4;
+      --accent-soft: #0e2b2e;
+      --warm: #cf8159;
+      --warm-soft: #2b1f18;
+      --good: #58b78a;
+      --good-soft: #12271d;
+      --bad: #e07a7a;
+      --bad-soft: #2f1a1b;
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0b1312;
+    --surface: #131c1b;
+    --surface-sunk: #192423;
+    --fg: #dfe8e7;
+    --fg-soft: #bccac8;
+    --muted: #829593;
+    --line: #22302f;
+    --line-strong: #334341;
+    --accent: #3fa8b4;
+    --accent-soft: #0e2b2e;
+    --warm: #cf8159;
+    --warm-soft: #2b1f18;
+    --good: #58b78a;
+    --good-soft: #12271d;
+    --bad: #e07a7a;
+    --bad-soft: #2f1a1b;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 0 72px;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0 0 auto;
+    height: env(safe-area-inset-top, 0px);
+    background: var(--bg);
+    z-index: 20;
+  }
+
+  #progress {
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    left: 0;
+    height: 2px;
+    width: 0;
+    background: var(--accent);
+    z-index: 21;
+  }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+
+  /* ---------- hero ---------- */
+
+  header.hero {
+    grid-column: 1 / -1;
+    padding-block: 52px 34px;
+    border-bottom: 1px solid var(--line-strong);
+    display: grid;
+    gap: 18px;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    letter-spacing: .08em;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  h1 {
+    font-size: clamp(2rem, 5.4vw, 3rem);
+    line-height: 1.15;
+    letter-spacing: -.02em;
+    font-weight: 700;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  h1 code {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: .9em;
+    letter-spacing: -.04em;
+    color: var(--accent);
+    background: none;
+    padding: 0;
+  }
+
+  .lede {
+    font-size: 1.06rem;
+    color: var(--fg-soft);
+    max-width: 62ch;
+    margin: 0;
+  }
+
+  .thesis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+
+  .thesis div {
+    background: var(--surface);
+    padding: 14px 16px;
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .thesis b {
+    font-family: var(--font-mono);
+    font-size: .8rem;
+    font-weight: 500;
+    color: var(--accent);
+  }
+
+  .thesis span { font-size: .88rem; color: var(--fg-soft); line-height: 1.55; }
+
+  /* ---------- toc ---------- */
+
+  nav.toc { grid-column: 1 / -1; }
+
+  .toc-title {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    letter-spacing: .12em;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+
+  .toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1px;
+  }
+
+  .toc a {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: var(--fg-soft);
+    text-decoration: none;
+    font-size: .87rem;
+    line-height: 1.4;
+  }
+
+  .toc a .n {
+    font-family: var(--font-mono);
+    font-size: .76rem;
+    color: var(--muted);
+    min-width: 1.6em;
+  }
+
+  .toc a:hover { background: var(--surface-sunk); color: var(--fg); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .toc a.active { color: var(--accent); background: var(--accent-soft); }
+  .toc a.active .n { color: var(--accent); }
+
+  /* ---------- main ---------- */
+
+  main { grid-column: 1 / -1; min-width: 0; }
+
+  section { padding-block: 40px 8px; scroll-margin-top: 20px; }
+  section + section { border-top: 1px solid var(--line); }
+
+  .part {
+    font-family: var(--font-mono);
+    font-size: .76rem;
+    letter-spacing: .1em;
+    color: var(--warm);
+    margin: 0 0 6px;
+  }
+
+  h2 {
+    font-size: clamp(1.35rem, 3.2vw, 1.7rem);
+    letter-spacing: -.015em;
+    font-weight: 700;
+    margin: 0 0 8px;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .sub {
+    color: var(--muted);
+    font-size: .95rem;
+    margin: 0 0 22px;
+    max-width: 66ch;
+  }
+
+  h3 {
+    font-size: 1.06rem;
+    font-weight: 600;
+    margin: 32px 0 10px;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    text-wrap: balance;
+  }
+
+  h3 .n {
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    font-weight: 500;
+    color: var(--accent);
+    flex: none;
+  }
+
+  p { margin: 0 0 14px; max-width: 70ch; }
+  main ul, main ol { margin: 0 0 16px; padding-left: 1.3em; max-width: 70ch; }
+  main li { margin-bottom: 6px; }
+  main li::marker { color: var(--muted); }
+
+  strong { font-weight: 600; }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+
+  code {
+    font-family: var(--font-mono);
+    font-variant-ligatures: none;
+    font-size: .84em;
+    background: var(--surface-sunk);
+    padding: .08em .36em;
+    border-radius: 3px;
+  }
+
+  pre {
+    background: var(--surface-sunk);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+    font-size: .8rem;
+    line-height: 1.7;
+  }
+
+  pre code { background: none; padding: 0; font-size: 1em; }
+
+  .cm { color: var(--muted); }
+  .kw { color: var(--accent); }
+  .wr { color: var(--warm); }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 0 0 20px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+
+  table { border-collapse: collapse; width: 100%; font-size: .87rem; min-width: 480px; }
+
+  th, td {
+    text-align: left;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    line-height: 1.6;
+  }
+
+  th {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    letter-spacing: .06em;
+    color: var(--muted);
+    font-weight: 500;
+    background: var(--surface-sunk);
+    white-space: nowrap;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+
+  .note {
+    border-left: 3px solid var(--warm);
+    background: var(--warm-soft);
+    padding: 12px 16px;
+    border-radius: 0 5px 5px 0;
+    margin: 0 0 20px;
+    font-size: .92rem;
+    max-width: 70ch;
+  }
+
+  .note p:last-child { margin-bottom: 0; }
+
+  /* ---------- figures ---------- */
+
+  .fig { margin: 8px 0 28px; }
+
+  .fig-canvas {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 14px 12px;
+    overflow-x: auto;
+  }
+
+  .fig svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-width: calc(var(--w) * .8px);
+    color: var(--fg);
+    font-family: var(--font-sans);
+  }
+
+  .fig figcaption {
+    font-size: .84rem;
+    line-height: 1.65;
+    color: var(--muted);
+    margin-top: 10px;
+    max-width: 76ch;
+  }
+
+  .fig-n {
+    font-family: var(--font-mono);
+    font-size: .74rem;
+    color: var(--accent);
+    margin-right: 10px;
+  }
+
+  .fig text { fill: currentColor; font-size: 13px; }
+  .fig .sm { font-size: 12px; }
+  .fig .xs { font-size: 10.5px; }
+  .fig .cap { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .06em; fill: var(--muted); }
+  .fig .mono { font-family: var(--font-mono); font-variant-ligatures: none; }
+  .fig .b { font-weight: 600; }
+  .fig .c { text-anchor: middle; }
+  .fig .e { text-anchor: end; }
+  .fig .mute { fill: var(--muted); }
+  .fig .soft { fill: var(--fg-soft); }
+  .fig .t-acc { fill: var(--accent); }
+  .fig .t-warm { fill: var(--warm); }
+  .fig .t-good { fill: var(--good); }
+  .fig .t-bad { fill: var(--bad); }
+
+  .fig .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+  .fig .sunk { fill: var(--surface-sunk); stroke: var(--line-strong); stroke-width: 1; }
+  .fig .band { fill: var(--surface-sunk); }
+  .fig .acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; }
+  .fig .warm { fill: var(--warm-soft); stroke: var(--warm); stroke-width: 1.3; }
+  .fig .good { fill: var(--good-soft); stroke: var(--good); stroke-width: 1.3; }
+  .fig .bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.3; }
+  .fig .ghost { fill: none; stroke: var(--line-strong); stroke-width: 1.2; stroke-dasharray: 4 3; }
+  .fig .ring-acc { fill: var(--accent-soft); fill-opacity: .55; stroke: var(--accent); stroke-width: 1.3; stroke-dasharray: 5 3; }
+  .fig .ring-warm { fill: var(--warm-soft); fill-opacity: .55; stroke: var(--warm); stroke-width: 1.3; stroke-dasharray: 5 3; }
+
+  .fig .cell { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1; }
+  .fig .cell-acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; }
+  .fig .cell-warm { fill: var(--warm-soft); stroke: var(--warm); stroke-width: 1.3; }
+  .fig .cell-bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.3; }
+  .fig .cell-hole { fill: var(--surface-sunk); stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 2; }
+
+  .fig .pt { fill: var(--surface); stroke: var(--muted); stroke-width: 1.4; }
+  .fig .pt-acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+  .fig .pt-warm { fill: var(--warm-soft); stroke: var(--warm); stroke-width: 2; }
+  .fig .pt-good { fill: var(--good-soft); stroke: var(--good); stroke-width: 2; }
+  .fig .pt-bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 2; }
+  .fig .pt-gray { fill: var(--line-strong); stroke: var(--muted); stroke-width: 1.4; }
+  .fig .pt-black { fill: var(--fg-soft); stroke: var(--fg); stroke-width: 1.4; }
+  .fig .on-dark { fill: var(--surface); }
+
+  .fig .ln { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+  .fig .ln-acc { fill: none; stroke: var(--accent); stroke-width: 1.8; }
+  .fig .ln-warm { fill: none; stroke: var(--warm); stroke-width: 1.7; }
+  .fig .ln-good { fill: none; stroke: var(--good); stroke-width: 1.7; }
+  .fig .ln-bad { fill: none; stroke: var(--bad); stroke-width: 1.6; }
+  .fig .ln-faint { fill: none; stroke: var(--line-strong); stroke-width: 1.1; }
+  .fig .dash { stroke-dasharray: 4 3; }
+
+  .fig .ah { fill: var(--muted); }
+  .fig .ah-acc { fill: var(--accent); }
+  .fig .ah-warm { fill: var(--warm); }
+  .fig .ah-good { fill: var(--good); }
+  .fig .ah-bad { fill: var(--bad); }
+
+  /* ---------- footer ---------- */
+
+  footer.end {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line-strong);
+    padding-top: 20px;
+    margin-top: 32px;
+    font-size: .83rem;
+    color: var(--muted);
+    max-width: 72ch;
+  }
+
+  @media (min-width: 1000px) {
+    .shell { grid-template-columns: 224px minmax(0, 1fr); column-gap: 52px; }
+    nav.toc {
+      grid-column: 1;
+      position: sticky;
+      top: calc(env(safe-area-inset-top, 0px) + 24px);
+      align-self: start;
+      max-height: calc(100vh - 64px);
+      overflow-y: auto;
+      padding-block: 40px 20px;
+    }
+    main { grid-column: 2; }
+  }
+
+  @media (max-width: 999px) {
+    nav.toc { padding: 18px 0 4px; border-bottom: 1px solid var(--line); }
+    .toc ol { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+
+<div class="shell">
+
+  <header class="hero">
+    <p class="eyebrow">@openconsole/graph · 算法原理与设计</p>
+    <h1>把可变的图编译成 <code>Int32Array</code>，再在上面跑可中断的算法</h1>
+    <p class="lede">这个包是类型化端口的有向图内核。编辑器里的图要能增删改、发事件、带字符串 id；算法要的却是紧凑的整数数组。这篇教程从存储讲到 30 多个算法，每一节都说明它为什么这样实现，以及换一种做法会在哪里出错。</p>
+    <div class="thesis">
+      <div><b>可变与不可变分家</b><span>编辑走 Graph，计算走 Structure，中间只有一次编译</span></div>
+      <div><b>算法只认契约</b><span>六个只读字段，凑得出来就能跑全套算法</span></div>
+      <div><b>每一步都能停</b><span>单步压在 O(deg) / O(V)，任何规模都能分帧</span></div>
+      <div><b>宁可报错</b><span>中间态、负权、NaN、缺入向，一律不给看起来正常的答案</span></div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="目录">
+    <p class="toc-title">目录</p>
+    <ol>
+      <li><a href="#storage"><span class="n">01</span><span>存储：CSR 与索引空间</span></a></li>
+      <li><a href="#layers"><span class="n">02</span><span>分层与编辑层</span></a></li>
+      <li><a href="#contract"><span class="n">03</span><span>Structure 契约</span></a></li>
+      <li><a href="#compile"><span class="n">04</span><span>编译与增量复用</span></a></li>
+      <li><a href="#task"><span class="n">05</span><span>Task：可中断的调度</span></a></li>
+      <li><a href="#traverse"><span class="n">06</span><span>遍历与拓扑</span></a></li>
+      <li><a href="#path"><span class="n">07</span><span>最短路</span></a></li>
+      <li><a href="#connect"><span class="n">08</span><span>连通、割与支配</span></a></li>
+      <li><a href="#reach"><span class="n">09</span><span>可达与生成森林</span></a></li>
+      <li><a href="#ordering"><span class="n">10</span><span>增量拓扑序</span></a></li>
+      <li><a href="#principles"><span class="n">11</span><span>设计原则与验证</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="storage">
+      <p class="part">PART 01</p>
+      <h2>存储：CSR 与索引空间</h2>
+      <p class="sub">算法的速度先由数据怎么摆决定，后面每一章都建立在这一节的三条数组上。</p>
+
+      <h3><span class="n">1.1</span>邻接表摊平成三条数组</h3>
+      <p>最直观的图表示是「每个节点一个对象，对象里一个邻居数组」。它好写，但遍历一个节点的邻居要先解引用节点对象、再解引用数组，V 个节点就是 V 个对象加 V 个数组，缓存几乎每一步都失效。</p>
+      <p><strong>压缩稀疏行（CSR）</strong>把全部邻接写进三条定长数组。节点 <code>u</code> 的出边占据 <code>other</code> 上的一段连续区间，区间边界记在 <code>offset</code> 里。</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 300" style="--w:790" role="img" aria-label="四节点图与它的 CSR 三条数组：offset 给出每个节点的邻接区间，other 给对端节点，edge 给边序号"><defs><marker id="csr-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="csr-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">一张小图</text>
+<line x1="87.44" y1="87.81" x2="171.66" y2="64.97" class="ln-acc" marker-end="url(#csr-b)"/>
+<text x="129.55" y="71.39" class="c xs mute">e0</text>
+<line x1="85.76" y1="100.16" x2="173.66" y2="152.31" class="ln-acc" marker-end="url(#csr-b)"/>
+<text x="129.71" y="121.23" class="c xs mute">e1</text>
+<line x1="190" y1="76" x2="190" y2="143" class="ln" marker-end="url(#csr-a)"/>
+<text x="190" y="104.5" class="c xs mute">e2</text>
+<line x1="206" y1="162" x2="281" y2="162" class="ln" marker-end="url(#csr-a)"/>
+<text x="243.5" y="157" class="c xs mute">e3</text>
+<circle cx="72" cy="92" r="14" class="pt-acc"/>
+<text x="72" y="96.5" class="c b sm">0</text>
+<circle cx="190" cy="60" r="14" class="pt"/>
+<text x="190" y="64.5" class="c b sm">1</text>
+<circle cx="190" cy="162" r="14" class="pt"/>
+<text x="190" y="166.5" class="c b sm">2</text>
+<circle cx="300" cy="162" r="14" class="pt"/>
+<text x="300" y="166.5" class="c b sm">3</text>
+<text x="72" y="136" class="c xs mute">从 0 出发有两条出边</text>
+<text x="404" y="22" class="cap">摊平成三条 Int32Array</text>
+<text x="424" y="69" class="e mono xs mute">offset</text>
+<rect x="430" y="52" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="447" y="69" class="c mono sm">0</text>
+<text x="447" y="46" class="c mono xs mute">0</text>
+<rect x="464" y="52" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="481" y="69" class="c mono sm">2</text>
+<text x="481" y="46" class="c mono xs mute">1</text>
+<rect x="498" y="52" width="34" height="26" rx="4" class="cell"/>
+<text x="515" y="69" class="c mono sm">3</text>
+<text x="515" y="46" class="c mono xs mute">2</text>
+<rect x="532" y="52" width="34" height="26" rx="4" class="cell"/>
+<text x="549" y="69" class="c mono sm">4</text>
+<text x="549" y="46" class="c mono xs mute">3</text>
+<rect x="566" y="52" width="34" height="26" rx="4" class="cell"/>
+<text x="583" y="69" class="c mono sm">4</text>
+<text x="583" y="46" class="c mono xs mute">4</text>
+<text x="424" y="157" class="e mono xs mute">other</text>
+<rect x="430" y="140" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="447" y="157" class="c mono sm">1</text>
+<text x="447" y="134" class="c mono xs mute">0</text>
+<rect x="464" y="140" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="481" y="157" class="c mono sm">2</text>
+<text x="481" y="134" class="c mono xs mute">1</text>
+<rect x="498" y="140" width="34" height="26" rx="4" class="cell"/>
+<text x="515" y="157" class="c mono sm">2</text>
+<text x="515" y="134" class="c mono xs mute">2</text>
+<rect x="532" y="140" width="34" height="26" rx="4" class="cell"/>
+<text x="549" y="157" class="c mono sm">3</text>
+<text x="549" y="134" class="c mono xs mute">3</text>
+<text x="424" y="212" class="e mono xs mute">edge</text>
+<rect x="430" y="195" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="447" y="212" class="c mono sm">0</text>
+<text x="447" y="189" class="c mono xs mute">0</text>
+<rect x="464" y="195" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="481" y="212" class="c mono sm">1</text>
+<text x="481" y="189" class="c mono xs mute">1</text>
+<rect x="498" y="195" width="34" height="26" rx="4" class="cell"/>
+<text x="515" y="212" class="c mono sm">2</text>
+<text x="515" y="189" class="c mono xs mute">2</text>
+<rect x="532" y="195" width="34" height="26" rx="4" class="cell"/>
+<text x="549" y="212" class="c mono sm">3</text>
+<text x="549" y="189" class="c mono xs mute">3</text>
+<path d="M430,84 L430,96 L498,96 L498,134" class="ln-acc dash" marker-end="url(#csr-b)"/>
+<text x="506" y="100" class="mono xs t-acc">offset[0]=0 … offset[1]=2</text>
+<text x="506" y="116" class="xs mute">⇒ 槽 0、1 是节点 0 的邻接</text>
+<rect x="430" y="240" width="346" height="44" rx="4" class="sunk"/>
+<text x="442" y="259" class="mono sm">for (k = offset[u]; k &lt; offset[u+1]; k++)</text>
+<text x="442" y="276" class="mono sm t-acc">  邻居 = other[k]，边权 = weight[edge[k]]</text>
+<text x="16" y="268" class="b">遍历一个节点的邻居</text>
+<text x="16" y="285" class="sm mute">= 一次顺序数组扫描</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 1</span>邻接表摊平成三条定长数组。<code>offset</code> 长 V+1，节点 <code>u</code> 的邻接槽区间是 <code>[offset[u], offset[u+1])</code>；<code>other</code> 给对端，<code>edge</code> 给边序号。遍历邻居因此是一次顺序扫描，没有指针解引用，也不为任何节点单独分配数组。</figcaption>
+</figure>
+
+      <p>第三条数组 <code>edge</code> 把邻接槽映射回边序号。边权不直接塞进邻接槽，有三个原因：平行边要能各自带权；无向编译时一条边在两端各占一个槽，它们得指向同一个权重；换一套权重时 CSR 可以原样复用。</p>
+
+      <h3><span class="n">1.2</span>建 CSR 是一次计数排序</h3>
+      <p>编译器手里是一张弧表（每条边的两端），要把它按源节点分组。比较排序是 O(E log E)，但这里的键是 0 到 V−1 的整数，计数排序三遍 O(V+E) 就够了。</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 320" style="--w:790" role="img" aria-label="建 CSR 的三遍扫描：先按源节点计数，再做前缀和得到区间起点，最后用游标把每条边落到位"><defs><marker id="build-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="18" class="cap">输入：弧表</text>
+<text x="86" y="59" class="e mono xs mute">tail</text>
+<rect x="92" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="109" y="59" class="c mono sm">0</text>
+<text x="109" y="36" class="c mono xs mute">0</text>
+<rect x="126" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="143" y="59" class="c mono sm">0</text>
+<text x="143" y="36" class="c mono xs mute">1</text>
+<rect x="160" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="177" y="59" class="c mono sm">1</text>
+<text x="177" y="36" class="c mono xs mute">2</text>
+<rect x="194" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="211" y="59" class="c mono sm">2</text>
+<text x="211" y="36" class="c mono xs mute">3</text>
+<text x="86" y="97" class="e mono xs mute">head</text>
+<rect x="92" y="80" width="34" height="26" rx="4" class="cell"/>
+<text x="109" y="97" class="c mono sm">1</text>
+<rect x="126" y="80" width="34" height="26" rx="4" class="cell"/>
+<text x="143" y="97" class="c mono sm">2</text>
+<rect x="160" y="80" width="34" height="26" rx="4" class="cell"/>
+<text x="177" y="97" class="c mono sm">2</text>
+<rect x="194" y="80" width="34" height="26" rx="4" class="cell"/>
+<text x="211" y="97" class="c mono sm">3</text>
+<text x="330" y="18" class="cap">第 1 遍 · 计数：offset[tail+1]++</text>
+<rect x="330" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="347" y="59" class="c mono sm">0</text>
+<text x="347" y="36" class="c mono xs mute">0</text>
+<rect x="364" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="381" y="59" class="c mono sm">2</text>
+<text x="381" y="36" class="c mono xs mute">1</text>
+<rect x="398" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="415" y="59" class="c mono sm">1</text>
+<text x="415" y="36" class="c mono xs mute">2</text>
+<rect x="432" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="449" y="59" class="c mono sm">1</text>
+<text x="449" y="36" class="c mono xs mute">3</text>
+<rect x="466" y="42" width="34" height="26" rx="4" class="cell"/>
+<text x="483" y="59" class="c mono sm">0</text>
+<text x="483" y="36" class="c mono xs mute">4</text>
+<text x="330" y="88" class="xs mute">每个节点有几条出边，先记在它的下一格</text>
+<text x="330" y="128" class="cap">第 2 遍 · 前缀和：offset[u+1] += offset[u]</text>
+<rect x="330" y="152" width="34" height="26" rx="4" class="cell"/>
+<text x="347" y="169" class="c mono sm">0</text>
+<text x="347" y="146" class="c mono xs mute">0</text>
+<rect x="364" y="152" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="381" y="169" class="c mono sm">2</text>
+<text x="381" y="146" class="c mono xs mute">1</text>
+<rect x="398" y="152" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="415" y="169" class="c mono sm">3</text>
+<text x="415" y="146" class="c mono xs mute">2</text>
+<rect x="432" y="152" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="449" y="169" class="c mono sm">4</text>
+<text x="449" y="146" class="c mono xs mute">3</text>
+<rect x="466" y="152" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="483" y="169" class="c mono sm">4</text>
+<text x="483" y="146" class="c mono xs mute">4</text>
+<text x="330" y="198" class="xs mute">逐格累加，每格成了该节点区间的终点</text>
+<text x="16" y="244" class="cap">第 3 遍 · 落位：cursor 从 offset 拷一份，每条边 slot = cursor[tail]++</text>
+<text x="86" y="279" class="e mono xs mute">cursor</text>
+<rect x="92" y="262" width="34" height="26" rx="4" class="cell-warm"/>
+<text x="109" y="279" class="c mono sm">2</text>
+<rect x="126" y="262" width="34" height="26" rx="4" class="cell-warm"/>
+<text x="143" y="279" class="c mono sm">3</text>
+<rect x="160" y="262" width="34" height="26" rx="4" class="cell-warm"/>
+<text x="177" y="279" class="c mono sm">4</text>
+<rect x="194" y="262" width="34" height="26" rx="4" class="cell-warm"/>
+<text x="211" y="279" class="c mono sm">4</text>
+<text x="92" y="306" class="xs mute">逐边自增，用完即为下一个区间的起点</text>
+<line x1="236" y1="275" x2="284" y2="275" class="ln" marker-end="url(#build-a)"/>
+<text x="326" y="279" class="e mono xs mute">other</text>
+<rect x="332" y="262" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="349" y="279" class="c mono sm">1</text>
+<rect x="366" y="262" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="383" y="279" class="c mono sm">2</text>
+<rect x="400" y="262" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="417" y="279" class="c mono sm">2</text>
+<rect x="434" y="262" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="451" y="279" class="c mono sm">3</text>
+<text x="500" y="274" class="xs mute">三遍都是裸循环：这是整个编译里最热的</text>
+<text x="500" y="290" class="xs mute">一段，包成闭包就拿不到内联</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 2</span>计数排序建 CSR，三遍 O(V+E)。第一遍数出每个节点的出边条数，第二遍前缀和把计数变成区间边界，第三遍用一条游标数组把每条边写进它该去的槽。无向编译时每条边在两端各记一次，自环只记一次。</figcaption>
+</figure>
+
+      <p>这段代码刻意写成裸循环。它是编译里最贵的单项，包成捕获四条数组的闭包就拿不到内联。编译器与子集视图共用同一个 <code>adjacency()</code>：两处各写一遍，迟早会在自环或无向的边界上分叉。</p>
+
+      <h3><span class="n">1.3</span>算法在索引空间里进出</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 262" style="--w:790" role="img" aria-label="id 空间与索引空间的边界：字符串哈希只在 indexOf 和 names 两处发生，算法内部全是整数"><defs><marker id="space-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="44" width="222" height="186" rx="6" class="band"/>
+<text x="28" y="66" class="cap">id 空间 · 人机边界</text>
+<rect x="30" y="84" width="194" height="32" rx="4" class="box"/>
+<text x="42" y="105" class="mono sm">nodeId("build")</text>
+<rect x="30" y="128" width="194" height="32" rx="4" class="box"/>
+<text x="42" y="149" class="mono sm">nodeId("test")</text>
+<rect x="30" y="172" width="194" height="32" rx="4" class="box"/>
+<text x="42" y="193" class="mono sm">nodeId("deploy")</text>
+<text x="28" y="246" class="xs mute">字符串，给人看</text>
+<rect x="330" y="44" width="444" height="186" rx="6" class="band"/>
+<text x="342" y="66" class="cap">索引空间 · 算法内部</text>
+<rect x="344" y="84" width="34" height="26" rx="4" class="cell"/>
+<text x="361" y="101" class="c mono sm">0</text>
+<rect x="378" y="84" width="34" height="26" rx="4" class="cell"/>
+<text x="395" y="101" class="c mono sm">1</text>
+<rect x="412" y="84" width="34" height="26" rx="4" class="cell"/>
+<text x="429" y="101" class="c mono sm">2</text>
+<text x="452" y="103" class="sm">节点就是数组下标</text>
+<rect x="344" y="130" width="416" height="36" rx="4" class="acc"/>
+<text x="356" y="153" class="mono sm t-acc">toposort → Int32Array [0, 1, 2]</text>
+<rect x="344" y="176" width="416" height="36" rx="4" class="acc"/>
+<text x="356" y="199" class="mono sm t-acc">shortestPath → { distance, path: Int32Array }</text>
+<text x="342" y="246" class="xs mute">结果直接落在 typed-array 里，不经一次装箱</text>
+<line x1="240" y1="100" x2="328" y2="100" class="ln-acc" marker-end="url(#space-b)"/>
+<text x="284" y="92" class="c mono xs t-acc">indexOf()</text>
+<line x1="328" y1="196" x2="240" y2="196" class="ln-acc" marker-end="url(#space-b)"/>
+<text x="284" y="188" class="c mono xs t-acc">names()</text>
+<text x="284" y="212" class="c xs mute">一次换回</text>
+<text x="284" y="30" class="c b t-warm">哈希只在这条线上付</text>
+<line x1="284" y1="36" x2="284" y2="48" class="ln-warm dash"/>
+</svg></div>
+  <figcaption><span class="fig-n">图 3</span>算法收发的是索引而不是 id。索引就是数组下标，结果可以直接写进 <code>Int32Array</code>；换成 id 则每个节点都要付一次字符串哈希，还要在「索引 → 名字 → 查回索引」之间往返。边界上调一次 <code>indexOf()</code> / <code>names()</code> 就够了。</figcaption>
+</figure>
+
+      <p>这条规矩一直延伸到外部接口：<code>toposort</code> 给 <code>Int32Array</code>，<code>ranks</code> 给按索引下标的 <code>Int32Array</code>，<code>dominators</code> 给 <code>idom[u]</code>。要名字时在边界上调一次 <code>snapshot.names()</code>。</p>
+    </section>
+
+    <section id="layers">
+      <p class="part">PART 02</p>
+      <h2>分层与编辑层</h2>
+      <p class="sub">编辑要的是灵活，计算要的是不可变。把两者放在一个类里，就得在每次邻接查询上为前者付代价。</p>
+
+      <h3><span class="n">2.1</span>四层各管一件事</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 290" style="--w:790" role="img" aria-label="四层职责与依赖方向：算法只依赖 Structure 契约，从不 import Graph，这条边界由分层测试机检"><defs><marker id="layers-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="layers-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="layers-r" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-bad" d="M0,1L10,5L0,9z"/></marker><marker id="layers-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="26" y="40" width="168" height="60" rx="4" class="box"/>
+<text x="110" y="67" class="c b">Graph</text>
+<text x="110" y="82" class="c xs mute">编辑：增删改、事件</text>
+<rect x="26" y="178" width="168" height="60" rx="4" class="box"/>
+<text x="110" y="205" class="c b">Ordering</text>
+<text x="110" y="220" class="c xs mute">增量拓扑序</text>
+<rect x="240" y="108" width="160" height="60" rx="4" class="warm"/>
+<text x="320" y="135" class="c b t-warm">Snapshot</text>
+<text x="320" y="150" class="c xs mute">编译器 + 成品容器</text>
+<rect x="446" y="108" width="160" height="60" rx="4" class="acc"/>
+<text x="526" y="135" class="c b t-acc">Structure</text>
+<text x="526" y="150" class="c xs mute">六个只读字段</text>
+<rect x="640" y="40" width="134" height="60" rx="4" class="box"/>
+<text x="707" y="67" class="c b">algorithm</text>
+<text x="707" y="82" class="c xs mute">30+ 个算法</text>
+<rect x="640" y="178" width="134" height="60" rx="4" class="box"/>
+<text x="707" y="205" class="c b">Task</text>
+<text x="707" y="220" class="c xs mute">分步 · 可中断</text>
+<line x1="195.3" y1="71.52" x2="236.76" y2="120.19" class="ln" marker-end="url(#layers-a)"/>
+<text x="222" y="86" class="xs mute">读</text>
+<line x1="195.27" y1="206.45" x2="236.83" y2="155.86" class="ln" marker-end="url(#layers-a)"/>
+<text x="222" y="200" class="xs mute">订阅事件</text>
+<line x1="400" y1="138" x2="444" y2="138" class="ln-warm" marker-end="url(#layers-w)"/>
+<text x="422" y="130" class="c xs t-warm">实现</text>
+<line x1="640" y1="86" x2="608" y2="124" class="ln-acc" marker-end="url(#layers-b)"/>
+<line x1="640" y1="196" x2="608" y2="156" class="ln-acc" marker-end="url(#layers-b)"/>
+<text x="628" y="104" class="e xs t-acc">依赖</text>
+<text x="628" y="186" class="e xs t-acc">依赖</text>
+<path d="M660,76 C520,20 300,20 150,36" class="ln-bad dash" marker-end="url(#layers-r)"/>
+<circle cx="409" cy="29" r="11" class="bad"/>
+<line x1="403" y1="35" x2="415" y2="23" class="ln-bad"/>
+<text x="417" y="68" class="c sm t-bad">algorithm 不 import graph / compile / snapshot</text>
+<text x="417" y="84" class="c xs mute">tests/unit/layering.test.ts 逐条机检</text>
+<text x="16" y="272" class="xs mute">同时站在两侧的只有 Snapshot 与 Ordering，都是显式的桥接</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 4</span>四层各管一件事，依赖只向下。算法层对编辑层一无所知，所以 Worker 里只跑算法时，<code>Graph</code> / <code>Journal</code> / <code>Hierarchy</code> 这些符号会被打包器整段摇掉。这条边界写成了断言：分层测试读源码的 import 语句，连算法之间的相互依赖也只许有 <code>reach → {component, search}</code> 这一条。</figcaption>
+</figure>
+
+      <p>输入不可变带来三件事。长跑任务中断后恢复，不会读到改了一半的图。快照能整份搬进 Worker。过滤、折叠、无向化、合并都在编译期一次做完，运行期没有谓词回调，也没有视图转发的开销。</p>
+
+      <h3><span class="n">2.2</span>平行数组与稳定索引</h3>
+      <p>编辑层里，节点与边都以整数槽位寻址，属性存在平行数组里。槽位由 <code>Slots</code> 分配：它维护「键 → 索引」与「索引 → 键」两张表，外加一条自由表。</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 272" style="--w:790" role="img" aria-label="自由表让删除留下的空位得到复用，同时保证已发出的索引永不改指"><defs></defs>
+<text x="16" y="58" class="b">① 依次加入 a、b、c</text>
+<rect x="210" y="40" width="34" height="26" rx="4" class="cell"/>
+<text x="227" y="57" class="c mono sm">a</text>
+<text x="227" y="34" class="c mono xs mute">0</text>
+<rect x="244" y="40" width="34" height="26" rx="4" class="cell"/>
+<text x="261" y="57" class="c mono sm">b</text>
+<text x="261" y="34" class="c mono xs mute">1</text>
+<rect x="278" y="40" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="295" y="57" class="c mono sm">c</text>
+<text x="295" y="34" class="c mono xs mute">2</text>
+<text x="360" y="58" class="mono sm mute">free = []</text>
+<text x="470" y="58" class="sm mute">槽位按序分配</text>
+<text x="16" y="138" class="b">② 删掉 b</text>
+<rect x="210" y="120" width="34" height="26" rx="4" class="cell"/>
+<text x="227" y="137" class="c mono sm">a</text>
+<text x="227" y="114" class="c mono xs mute">0</text>
+<rect x="244" y="120" width="34" height="26" rx="4" class="cell-hole"/>
+<text x="261" y="137" class="c mono sm">·</text>
+<text x="261" y="114" class="c mono xs mute">1</text>
+<rect x="278" y="120" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="295" y="137" class="c mono sm">c</text>
+<text x="295" y="114" class="c mono xs mute">2</text>
+<text x="360" y="138" class="mono sm mute">free = [1]</text>
+<text x="470" y="138" class="sm mute">索引 1 进自由表，不塌缩</text>
+<text x="16" y="218" class="b">③ 加入 d</text>
+<rect x="210" y="200" width="34" height="26" rx="4" class="cell"/>
+<text x="227" y="217" class="c mono sm">a</text>
+<text x="227" y="194" class="c mono xs mute">0</text>
+<rect x="244" y="200" width="34" height="26" rx="4" class="cell-warm"/>
+<text x="261" y="217" class="c mono sm">d</text>
+<text x="261" y="194" class="c mono xs mute">1</text>
+<rect x="278" y="200" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="295" y="217" class="c mono sm">c</text>
+<text x="295" y="194" class="c mono xs mute">2</text>
+<text x="360" y="218" class="mono sm mute">free = []</text>
+<text x="470" y="218" class="sm mute">新键复用槽位 1</text>
+<rect x="652" y="34" width="122" height="222" rx="4" class="acc"/>
+<text x="713" y="58" class="c sm t-acc">c 的索引</text>
+<text x="713" y="84" class="c mono t-acc">2</text>
+<text x="713" y="112" class="c sm t-acc">三步都没动</text>
+<text x="713" y="136" class="c xs mute">外部持有的下标</text>
+<text x="713" y="152" class="c xs mute">不会被静默改指</text>
+<text x="713" y="190" class="c xs mute">要回收空位</text>
+<text x="713" y="206" class="c xs mute">就显式 compact()</text>
+<text x="713" y="226" class="c xs mute">并派发 compacted</text>
+<text x="713" y="242" class="c xs mute">带旧→新映射</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 5</span>删除只把槽位置空并记进自由表，后续新增优先复用空位。整个过程中 <code>c</code> 始终在索引 2 上，所以外部缓存的下标、事件载荷里的 <code>slot</code>、快照里的映射都不会突然指向别的东西。真要稠密编号就显式调 <code>compact()</code>，它会发 <code>compacted</code> 事件把旧→新映射交给订阅者。</figcaption>
+</figure>
+
+      <p>槽位一旦稳定，就能当作一等公民公开出去。所以图同时提供三套访问口径：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>口径</th><th>例子</th><th>用在</th></tr></thead>
+          <tbody>
+            <tr><td>按 id，要哈希，给对象</td><td><code>node(id)</code> / <code>edge(id)</code></td><td>交互与查询</td></tr>
+            <tr><td>按槽位，无哈希，给对象</td><td><code>nodeAt(slot)</code> / <code>edgeAt(slot)</code></td><td>全图扫描</td></tr>
+            <tr><td>按槽位，无哈希，给整数</td><td><code>forEachLink</code> / <code>forEachOutAt</code></td><td>编译与增量</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>编译快照、打包、增量拓扑序全走第三种，这些路径上一次字符串哈希都不做。命名上 <code>At</code> 后缀一律表示「收槽位、不查 id 表」。</p>
+
+      <h3><span class="n">2.3</span>摘链不搜索</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 276" style="--w:790" role="img" aria-label="O(1) 摘链：末尾那项补到空出的位置，并改写它的位置索引，然后 pop"><defs><marker id="unhook-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">节点 u 的邻接表，要摘掉 e7</text>
+<text x="92" y="69" class="e mono xs mute">list</text>
+<rect x="98" y="52" width="34" height="26" rx="4" class="cell"/>
+<text x="115" y="69" class="c mono sm">e3</text>
+<text x="115" y="46" class="c mono xs mute">0</text>
+<rect x="132" y="52" width="34" height="26" rx="4" class="cell-bad"/>
+<text x="149" y="69" class="c mono sm">e7</text>
+<text x="149" y="46" class="c mono xs mute">1</text>
+<rect x="166" y="52" width="34" height="26" rx="4" class="cell"/>
+<text x="183" y="69" class="c mono sm">e5</text>
+<text x="183" y="46" class="c mono xs mute">2</text>
+<rect x="200" y="52" width="34" height="26" rx="4" class="cell-warm"/>
+<text x="217" y="69" class="c mono sm">e9</text>
+<text x="217" y="46" class="c mono xs mute">3</text>
+<text x="98" y="110" class="xs mute">边在表里的位置另记一条 place：place[e9] = 3</text>
+<line x1="250" y1="140" x2="250" y2="166" class="ln" marker-end="url(#unhook-a)"/>
+<text x="262" y="150" class="sm">e9 补到位置 1</text>
+<text x="262" y="166" class="sm">改 place[e9]，再 pop</text>
+<text x="92" y="199" class="e mono xs mute">list</text>
+<rect x="98" y="182" width="34" height="26" rx="4" class="cell"/>
+<text x="115" y="199" class="c mono sm">e3</text>
+<text x="115" y="176" class="c mono xs mute">0</text>
+<rect x="132" y="182" width="34" height="26" rx="4" class="cell-acc"/>
+<text x="149" y="199" class="c mono sm">e9</text>
+<text x="149" y="176" class="c mono xs mute">1</text>
+<rect x="166" y="182" width="34" height="26" rx="4" class="cell"/>
+<text x="183" y="199" class="c mono sm">e5</text>
+<text x="183" y="176" class="c mono xs mute">2</text>
+<rect x="200" y="182" width="34" height="26" rx="4" class="ghost"/>
+<text x="217" y="199" class="c xs mute">pop</text>
+<text x="98" y="240" class="sm t-acc">三次数组写入，与表长无关</text>
+<rect x="470" y="40" width="304" height="196" rx="4" class="bad"/>
+<text x="486" y="64" class="b t-bad">换成 list.indexOf(e7) 呢</text>
+<text x="486" y="86" class="sm">单次摘链 O(deg)，清空一个扇出 4000</text>
+<text x="486" y="104" class="sm">的节点就是 O(deg²) ≈ 1600 万次比较。</text>
+<text x="486" y="130" class="sm mute">而且这条路径是共用的：</text>
+<rect x="486" y="146" width="88" height="22" rx="4" class="box"/>
+<text x="530" y="161" class="c mono xs">disconnect</text>
+<rect x="582" y="146" width="88" height="22" rx="4" class="box"/>
+<text x="626" y="161" class="c mono xs">clearEdges</text>
+<rect x="678" y="146" width="88" height="22" rx="4" class="box"/>
+<text x="722" y="161" class="c mono xs">reshape</text>
+<rect x="486" y="176" width="88" height="22" rx="4" class="box"/>
+<text x="530" y="191" class="c mono xs">dropNode</text>
+<rect x="582" y="176" width="88" height="22" rx="4" class="box"/>
+<text x="626" y="191" class="c mono xs">分组子表</text>
+<text x="486" y="226" class="xs t-bad">退化一处，这五处一起退化</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 6</span>摘链不搜索。每条边都记着自己在两端邻接表里的下标，所以删一条边是「末尾补位 + 改一个下标 + pop」。<code>disconnect</code>、<code>clearEdges</code>、<code>reshape</code>、<code>dropNode</code> 和分组子表共用这一个原语，于是清空高扇出节点、解散大分组都保持线性。</figcaption>
+</figure>
+
+    </section>
+
+    <section id="contract">
+      <p class="part">PART 03</p>
+      <h2>Structure 契约</h2>
+      <p class="sub">算法与图之间的全部约定，就是下面这六个字段。</p>
+
+      <pre><code><span class="kw">interface</span> Structure {
+  <span class="kw">readonly</span> order: number;
+  <span class="kw">readonly</span> size: number;
+  <span class="kw">readonly</span> outbound: Adjacency;             <span class="cm">// { offset, other, edge }</span>
+  <span class="kw">readonly</span> inbound: Adjacency | undefined; <span class="cm">// 与 outbound 同一对象即无向编译</span>
+  <span class="kw">readonly</span> weight: Reals | undefined;     <span class="cm">// 边权，省略即每条边按 1 计</span>
+  <span class="kw">readonly</span> cost: Reals | undefined;       <span class="cm">// 点权，省略即每个节点按 0 计</span>
+}</code></pre>
+
+      <h3><span class="n">3.1</span>接口，而不是类</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 300" style="--w:790" role="img" aria-label="Structure 是六个只读字段的接口，任何凑得出这六样的实现都能跑全套算法"><defs><marker id="contract-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="270" y="54" width="250" height="196" rx="4" class="acc"/>
+<text x="395" y="78" class="c b t-acc">Structure</text>
+<text x="286" y="108" class="mono sm b">order</text>
+<text x="382" y="108" class="xs mute">节点数</text>
+<text x="286" y="134" class="mono sm b">size</text>
+<text x="382" y="134" class="xs mute">边数</text>
+<text x="286" y="160" class="mono sm b">outbound</text>
+<text x="382" y="160" class="xs mute">出向 CSR</text>
+<text x="286" y="186" class="mono sm b">inbound</text>
+<text x="382" y="186" class="xs mute">入向 CSR 或 undefined</text>
+<text x="286" y="212" class="mono sm b">weight</text>
+<text x="382" y="212" class="xs mute">边权或 undefined</text>
+<text x="286" y="238" class="mono sm b">cost</text>
+<text x="382" y="238" class="xs mute">点权或 undefined</text>
+<text x="395" y="268" class="c xs mute">全是纯数据，没有一个方法</text>
+<rect x="16" y="54" width="196" height="56" rx="4" class="box"/>
+<text x="114" y="79" class="c b">Snapshot</text>
+<text x="114" y="94" class="c xs mute">从 Graph 编译</text>
+<line x1="212" y1="82" x2="268" y2="82" class="ln" marker-end="url(#contract-a)"/>
+<rect x="16" y="124" width="196" height="56" rx="4" class="box"/>
+<text x="114" y="149" class="c b">subset()</text>
+<text x="114" y="164" class="c xs mute">索引子集视图</text>
+<line x1="212" y1="152" x2="268" y2="152" class="ln" marker-end="url(#contract-a)"/>
+<rect x="16" y="194" width="196" height="56" rx="4" class="box"/>
+<text x="114" y="219" class="c b">reversed()</text>
+<text x="114" y="234" class="c xs mute">O(1) 翻转，共享数组</text>
+<line x1="212" y1="222" x2="268" y2="222" class="ln" marker-end="url(#contract-a)"/>
+<rect x="578" y="54" width="196" height="56" rx="4" class="box"/>
+<text x="676" y="79" class="c b">手写字面量</text>
+<text x="676" y="94" class="c xs mute">三行就是一条链</text>
+<line x1="576" y1="82" x2="522" y2="82" class="ln" marker-end="url(#contract-a)"/>
+<rect x="578" y="124" width="196" height="56" rx="4" class="box"/>
+<text x="676" y="149" class="c b">WASM 内存视图</text>
+<text x="676" y="164" class="c xs mute">跨语言导出的 CSR</text>
+<line x1="576" y1="152" x2="522" y2="152" class="ln" marker-end="url(#contract-a)"/>
+<rect x="578" y="194" width="196" height="56" rx="4" class="box"/>
+<text x="676" y="219" class="c b">SharedArrayBuffer</text>
+<text x="676" y="234" class="c xs mute">多 Worker 零拷贝</text>
+<line x1="576" y1="222" x2="522" y2="222" class="ln" marker-end="url(#contract-a)"/>
+</svg></div>
+  <figcaption><span class="fig-n">图 7</span>契约是接口而不是类。算法只读这六个字段，于是自定义存储、跨语言内存、按规则生成的图、子集视图都不必先塞进 <code>Graph</code> 再编译一遍。字段类型是只读的 <code>Ints</code> / <code>Reals</code>，所以「不可变」在编译期就成立。</figcaption>
+</figure>
+
+      <p>手写一条三节点链就能跑最短路，不经过 <code>Graph</code>：</p>
+      <pre><code><span class="kw">const</span> chain: Structure = {
+  order: 3, size: 2,
+  outbound: { offset: Int32Array.of(0, 1, 2, 2), other: Int32Array.of(1, 2), edge: Int32Array.of(0, 1) },
+  inbound:  { offset: Int32Array.of(0, 0, 1, 2), other: Int32Array.of(0, 1), edge: Int32Array.of(0, 1) },
+  weight: Float64Array.of(3, 4),
+  cost: undefined,
+};
+settle(shortestPath(chain, 0, 2)); <span class="cm">// { distance: 7, path: [0, 1, 2] }</span></code></pre>
+
+      <h3><span class="n">3.2</span>点权为什么独立一条</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 290" style="--w:790" role="img" aria-label="点权是独立的一条数组：criticalPath 用节点自己的点权给距离播种，松弛时再加上边权和落点的点权"><defs><marker id="costs-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">criticalPath：一条路径的长度 = 沿途全部点权 + 全部边权</text>
+<circle cx="80" cy="96" r="18" class="pt-warm"/>
+<text x="80" y="100.5" class="c b sm">a</text>
+<text x="80" y="134" class="c xs t-warm">cost = 2</text>
+<circle cx="230" cy="96" r="18" class="pt-warm"/>
+<text x="230" y="100.5" class="c b sm">b</text>
+<text x="230" y="134" class="c xs t-warm">cost = 3</text>
+<circle cx="380" cy="96" r="18" class="pt-warm"/>
+<text x="380" y="100.5" class="c b sm">c</text>
+<text x="380" y="134" class="c xs t-warm">cost = 1</text>
+<line x1="100" y1="96" x2="207" y2="96" class="ln" marker-end="url(#costs-a)"/>
+<text x="153.5" y="91" class="c xs mute">w = 5</text>
+<line x1="250" y1="96" x2="357" y2="96" class="ln" marker-end="url(#costs-a)"/>
+<text x="303.5" y="91" class="c xs mute">w = 4</text>
+<rect x="60" y="146" width="360" height="52" rx="4" class="sunk"/>
+<text x="72" y="166" class="mono sm">dist[a] = cost[a] = 2</text>
+<text x="72" y="186" class="mono sm t-acc">dist[v] = dist[u] + weight[e] + cost[v]</text>
+<text x="60" y="224" class="mono b">2 + 5+3 + 4+1 = 15</text>
+<text x="60" y="244" class="xs mute">起点的点权也算在内，所以要给 dist 播种</text>
+<rect x="470" y="40" width="304" height="210" rx="4" class="bad"/>
+<text x="486" y="64" class="b t-bad">为什么摊不进边权</text>
+<circle cx="530" cy="110" r="14" class="pt"/>
+<text x="530" y="114.5" class="c b sm">p</text>
+<circle cx="530" cy="170" r="14" class="pt"/>
+<text x="530" y="174.5" class="c b sm">q</text>
+<circle cx="640" cy="140" r="14" class="pt-warm"/>
+<text x="640" y="144.5" class="c b sm">v</text>
+<line x1="545.44" y1="114.21" x2="621.67" y2="135" class="ln" marker-end="url(#costs-a)"/>
+<text x="583.55" y="119.61" class="c xs mute">+5</text>
+<line x1="545.44" y1="165.79" x2="621.67" y2="145" class="ln" marker-end="url(#costs-a)"/>
+<text x="583.55" y="160.39" class="c xs mute">+5</text>
+<text x="690" y="134" class="xs t-warm">cost[v]=5</text>
+<text x="486" y="206" class="sm">扇入 2 的 v，点权被写进两条入边：</text>
+<text x="486" y="224" class="sm">边权数组里多出一份，起点的点权还无处安放</text>
+<text x="486" y="242" class="sm t-bad">所以它要自己一条数组</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 8</span>节点自身的执行耗时摊不进边权。扇入大于 1 的节点会把自己的点权写进每一条入边，按边权求和的全局量因此失真；起点没有入边，它的点权更是无处安放。<code>criticalPath</code> 的做法是给每个节点的 <code>dist</code> 播上自己的点权，松弛时加上边权和落点的点权。</figcaption>
+</figure>
+
+
+      <h3><span class="n">3.3</span>缺入向：报错，而不是降级</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 282" style="--w:790" role="img" aria-label="只编出向时，弱连通会把一张图报成两个分量，所以需要入向的算法一律先报错而不是降级"><defs><marker id="oneway-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">同一张图：0 → 2，1 → 2</text>
+<line x1="105.12" y1="77.22" x2="182.04" y2="103.8" class="ln" marker-end="url(#oneway-a)"/>
+<line x1="105.12" y1="142.78" x2="182.04" y2="116.2" class="ln" marker-end="url(#oneway-a)"/>
+<circle cx="90" cy="72" r="14" class="pt"/>
+<text x="90" y="76.5" class="c b sm">0</text>
+<circle cx="90" cy="148" r="14" class="pt"/>
+<text x="90" y="152.5" class="c b sm">1</text>
+<circle cx="200" cy="110" r="14" class="pt"/>
+<text x="200" y="114.5" class="c b sm">2</text>
+<rect x="276" y="44" width="226" height="96" rx="4" class="good"/>
+<text x="288" y="68" class="b t-good">有入向：忽略方向两边都扫</text>
+<text x="288" y="94" class="mono sm">components → 1 个分量</text>
+<text x="288" y="118" class="mono sm t-good">{0, 1, 2}</text>
+<rect x="276" y="152" width="226" height="106" rx="4" class="bad"/>
+<text x="288" y="176" class="b t-bad">只有出向：只能沿出边走</text>
+<text x="288" y="202" class="mono sm">components → 2 个分量</text>
+<text x="288" y="226" class="mono sm t-bad">{0, 2}  {1}</text>
+<text x="288" y="246" class="xs t-bad">看起来正常，但是错的</text>
+<rect x="530" y="44" width="244" height="204" rx="4" class="warm"/>
+<text x="546" y="68" class="b t-warm">各自怎么错</text>
+<text x="546" y="94" class="mono sm b">prim</text>
+<text x="638" y="94" class="xs mute">漏掉整个分支</text>
+<text x="546" y="118" class="mono sm b">dominators</text>
+<text x="638" y="118" class="xs mute">idom 退化成 DFS 父节点</text>
+<text x="546" y="142" class="mono sm b">sources</text>
+<text x="638" y="142" class="xs mute">恒为空</text>
+<text x="546" y="166" class="mono sm b">cuts</text>
+<text x="638" y="166" class="xs mute">静默漏掉分支</text>
+<text x="546" y="190" class="mono sm b">reversed</text>
+<text x="638" y="190" class="xs mute">无从翻转</text>
+<text x="546" y="226" class="sm t-warm">所以它们先过 inboundOf，</text>
+<text x="546" y="242" class="sm t-warm">缺入向即抛 Oneway</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 9</span><code>Snapshot.of(graph, { outbound: true })</code> 省掉一半内存与编译时间，代价是没有反向邻接。放任不管的话，这些算法都会给出看起来正常的错答案，所以它们一律先过 <code>inboundOf</code> 这道关。无向概念（生成树、弱连通、割点）走的是 <code>mirror</code>：无向编译时返回 <code>undefined</code>，免得把每条边数两次。</figcaption>
+</figure>
+
+      <p>受这条约束的入口有 <code>degrees</code>、<code>sources</code>、<code>isolated</code>、<code>components</code>、<code>cuts</code>、<code>dominators</code>、<code>prim</code>、<code>ancestors</code>、<code>bidirectional</code>、<code>reversed</code>、<code>predecessors</code>。不受影响的有 <code>toposort</code>、<code>kruskal</code>、<code>sinks</code>：它们只用出向。</p>
+
+      <h3><span class="n">3.4</span>两个零成本的派生</h3>
+      <p><strong>子集视图。</strong><code>subset(structure, keep)</code> 只保留给定节点和两端都在其中的边，边权、点权按新序号重排，产出就是一个普通 <code>Structure</code>。它是 O(保留规模)；回 <code>Graph</code> 编一份过滤快照则是 O(V+E)，按分组逐个算时差一个数量级。</p>
+      <p><strong>边权画像。</strong>一遍 O(E) 扫描能得出三个结论：是否全是非负整数、最大值、首条负权边。它决定最短路走哪种队列（7.2 节），也顺手拦下 <code>NaN</code>。画像记在以权重数组为键的 <code>WeakMap</code> 上：<code>reversed()</code> 每次产出新的结构对象却共享同一份权重，以结构为键的话，反向搜索每跑一次就要重扫一遍。</p>
+    </section>
+
+    <section id="compile">
+      <p class="part">PART 04</p>
+      <h2>编译与增量复用</h2>
+      <p class="sub">编译器是可变图与不可变 CSR 之间唯一的桥，它也负责在图没怎么变时少干活。</p>
+
+      <h3><span class="n">4.1</span>视图是编译选项</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 800 300" style="--w:800" role="img" aria-label="编译流水线：折叠分组、过滤、合并平行边都在编译期一次做完，运行期没有谓词回调"><defs><marker id="pipe-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="20" class="cap">可变图</text>
+<rect x="16" y="32" width="120" height="54" rx="4" class="box"/>
+<text x="76" y="56" class="c b">Graph</text>
+<text x="76" y="71" class="c xs mute">平行数组 + 自由表</text>
+<rect x="168" y="32" width="126" height="54" rx="4" class="warm"/>
+<text x="231" y="56" class="c b t-warm">折叠</text>
+<text x="231" y="71" class="c xs mute">collapse：分组塌成单点</text>
+<rect x="310" y="32" width="126" height="54" rx="4" class="warm"/>
+<text x="373" y="56" class="c b t-warm">过滤</text>
+<text x="373" y="71" class="c xs mute">node / edge 谓词</text>
+<rect x="452" y="32" width="126" height="54" rx="4" class="warm"/>
+<text x="515" y="56" class="c b t-warm">合并</text>
+<text x="515" y="71" class="c xs mute">merge：平行边折成一条</text>
+<line x1="136" y1="59" x2="166" y2="59" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="296" y1="59" x2="308" y2="59" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="438" y1="59" x2="450" y2="59" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="578" y1="59" x2="608" y2="59" class="ln" marker-end="url(#pipe-a)"/>
+<rect x="610" y="32" width="164" height="54" rx="4" class="box"/>
+<text x="692" y="56" class="c b">边表 Arcs</text>
+<text x="692" y="71" class="c xs mute">tail / head / slots</text>
+<text x="150" y="113" class="cap">一次 O(V+E) 之后</text>
+<rect x="16" y="142" width="142" height="54" rx="4" class="acc"/>
+<text x="87" y="166" class="c b mono t-acc">outbound</text>
+<text x="87" y="181" class="c xs mute">CSR 三条数组</text>
+<line x1="87" y1="134" x2="87" y2="140" class="ln"/>
+<rect x="170" y="142" width="142" height="54" rx="4" class="acc"/>
+<text x="241" y="166" class="c b mono t-acc">inbound</text>
+<text x="241" y="181" class="c xs mute">翻转后再建一遍</text>
+<line x1="241" y1="134" x2="241" y2="140" class="ln"/>
+<rect x="324" y="142" width="142" height="54" rx="4" class="acc"/>
+<text x="395" y="166" class="c b mono t-acc">weight</text>
+<text x="395" y="181" class="c xs mute">按边槽位求值</text>
+<line x1="395" y1="134" x2="395" y2="140" class="ln"/>
+<rect x="478" y="142" width="142" height="54" rx="4" class="acc"/>
+<text x="549" y="166" class="c b mono t-acc">cost</text>
+<text x="549" y="181" class="c xs mute">按节点槽位求值</text>
+<line x1="549" y1="134" x2="549" y2="140" class="ln"/>
+<rect x="632" y="142" width="142" height="54" rx="4" class="acc"/>
+<text x="703" y="166" class="c b mono t-acc">layers</text>
+<text x="703" y="181" class="c xs mute">标注层 intern 成整数</text>
+<line x1="703" y1="134" x2="703" y2="140" class="ln"/>
+<line x1="140" y1="100" x2="140" y2="120" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="16" y1="120" x2="774" y2="120" class="ln"/>
+<line x1="87" y1="120" x2="87" y2="140" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="241" y1="120" x2="241" y2="140" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="395" y1="120" x2="395" y2="140" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="549" y1="120" x2="549" y2="140" class="ln" marker-end="url(#pipe-a)"/>
+<line x1="703" y1="120" x2="703" y2="140" class="ln" marker-end="url(#pipe-a)"/>
+<rect x="16" y="216" width="360" height="74" rx="4" class="sunk"/>
+<text x="28" y="240" class="b">视图是编译选项，不是运行期包装</text>
+<text x="28" y="260" class="sm mute">代价：编译付 O(V+E)。收益：运行期零开销，</text>
+<text x="28" y="278" class="sm mute">不存在「视图上 order 是 O(V)」这类陷阱。</text>
+<rect x="404" y="216" width="370" height="74" rx="4" class="warm"/>
+<text x="416" y="240" class="b t-warm">两个权重回调只吃那一端自己的权重值</text>
+<text x="416" y="260" class="sm mute">不给整条记录，这正是增量重编译能便宜的前提，</text>
+<text x="416" y="278" class="sm mute">也让两条数组各自独立作废。</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 10</span>编译器是可变图与不可变 CSR 之间唯一的桥。过滤、折叠、无向化、合并平行边、标注层都在这一趟里做完，产出全是 typed-array。算法因此只有一套实现，不存在「通用版 + 编译版」两条要同步维护的代码路径。</figcaption>
+</figure>
+
+      <pre><code>Snapshot.of(graph, {
+  weight: (w) =&gt; w ?? 1,             <span class="cm">// 边权</span>
+  cost: (n) =&gt; n.duration,            <span class="cm">// 点权</span>
+  node: (id, n) =&gt; keep(id),          <span class="cm">// 节点过滤</span>
+  collapse: [groupId],               <span class="cm">// 分组折叠成单节点</span>
+  undirected: <span class="kw">true</span>,                  <span class="cm">// 每条边在两端各出现一次</span>
+  outbound: <span class="kw">true</span>,                    <span class="cm">// 只编出向，省一半内存</span>
+  merge: Math.min,                   <span class="cm">// 平行边合并，权重两两聚合</span>
+  shared: <span class="kw">true</span>,                      <span class="cm">// 落在 SharedArrayBuffer 上</span>
+  reuse: previous,                   <span class="cm">// 增量重编译</span>
+});</code></pre>
+
+      <h3><span class="n">4.2</span>三个版本号，分开作废</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 300" style="--w:790" role="img" aria-label="图维护 shape、weights、costs 三个版本号，每类变更只推进它真正波及的那个，增量重编译据此分档复用"><defs></defs>
+<text x="16" y="22" class="cap">Graph 上的三个计数器</text>
+<rect x="16" y="34" width="118" height="52" rx="4" class="warm"/>
+<text x="75" y="56" class="c mono b t-warm">shape</text>
+<text x="75" y="74" class="c xs mute">结构：增删点、连线</text>
+<rect x="144" y="34" width="118" height="52" rx="4" class="acc"/>
+<text x="203" y="56" class="c mono b t-acc">weights</text>
+<text x="203" y="74" class="c xs mute">边权：setEdgeWeight</text>
+<rect x="272" y="34" width="118" height="52" rx="4" class="acc"/>
+<text x="331" y="56" class="c mono b t-acc">costs</text>
+<text x="331" y="74" class="c xs mute">点权：节点参数</text>
+<text x="16" y="120" class="cap">Snapshot.of(graph, { reuse: previous }) 按哪个计数器动了来分档</text>
+<rect x="16" y="134" width="758" height="30" rx="4" class="box"/>
+<text x="28" y="154" class="sm b">什么都没改</text>
+<text x="158" y="154" class="mono sm t-good">—</text>
+<text x="250" y="154" class="sm">原样返回同一个对象</text>
+<text x="762" y="154" class="e mono sm mute">O(1)</text>
+<rect x="16" y="170" width="758" height="30" rx="4" class="sunk"/>
+<text x="28" y="190" class="sm b">节点参数</text>
+<text x="158" y="190" class="mono sm t-acc">costs</text>
+<text x="250" y="190" class="sm">只重算点权；没编点权就只换个壳</text>
+<text x="762" y="190" class="e mono sm mute">O(V) / O(1)</text>
+<rect x="16" y="206" width="758" height="30" rx="4" class="box"/>
+<text x="28" y="226" class="sm b">边权</text>
+<text x="158" y="226" class="mono sm t-acc">weights</text>
+<text x="250" y="226" class="sm">只重算边权，按槽位直读、零哈希</text>
+<text x="762" y="226" class="e mono sm mute">O(E)</text>
+<rect x="16" y="242" width="758" height="30" rx="4" class="sunk"/>
+<text x="28" y="262" class="sm b">结构</text>
+<text x="158" y="262" class="mono sm t-warm">shape</text>
+<text x="250" y="262" class="sm">全量重编译</text>
+<text x="762" y="262" class="e mono sm mute">O(V+E)</text>
+<text x="16" y="290" class="xs mute">回调换了引用就重算那一条：要吃满加速，把 weight / cost 回调提成稳定引用</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 11</span>编辑器改的多半是参数而不是连线。三个版本号让作废分开：改一个节点的参数不会牵动边权，敲一次键因此不必把四万条边权重扫一遍。用了谓词、折叠或合并时，结构不再只由 <code>shape</code> 决定，一律退回全量编译。</figcaption>
+</figure>
+
+      <p>复用还有几道前提检查：传进来的快照必须出自同一张图、没被翻转过、编译选项一致、层回调引用相同。不满足的一律只是没有加速，不会出错。快照对源图只持 <code>WeakRef</code>：它常常活得比图久，强引用会把整张图连同端口对象一起钉住。</p>
+
+      <h3><span class="n">4.3</span>跨线程</h3>
+      <p>快照的 <code>data</code> 只含 typed-array 与字符串数组，可以直接 <code>postMessage</code>。Worker 侧用 <code>Snapshot.from(data)</code> 还原，它会校验长度与值域：<code>offset</code> 从 0 起且单调、<code>other[k]</code> 不越界，错位的数据不会一路静默算到底。</p>
+      <p>只跑索引空间算法的 Worker 改搬 <code>core</code>：它不带 id 标签。标签是字符串数组，结构化克隆只能逐个深拷贝，大图上占掉整份克隆耗时的绝大部分。多个 Worker 要零拷贝共享，就用 <code>shared: true</code> 直接编译到 <code>SharedArrayBuffer</code> 上。</p>
+    </section>
+
+    <section id="task">
+      <p class="part">PART 05</p>
+      <h2>Task：可中断的调度</h2>
+      <p class="sub">图算法全是同步的。要它们不冻结界面，就得能在任意一步停下来，过一帧再接着跑。</p>
+
+      <h3><span class="n">5.1</span>中间状态全在实例上</h3>
+      <pre><code><span class="kw">interface</span> Task&lt;T&gt; {
+  advance(budget: number): boolean; <span class="cm">// 推进至多 budget 步；false 表示已跑完</span>
+  <span class="kw">readonly</span> settled: boolean;
+  <span class="kw">readonly</span> progress: number;         <span class="cm">// 0..1</span>
+  result(): T;                      <span class="cm">// 没跑完抛 Incomplete</span>
+}</code></pre>
+      <p>中断只是停止调用 <code>advance</code>，再调一次就从原处接着跑。自家的算法继承 <code>Stepwise</code>，只实现 <code>step()</code> 与 <code>measure()</code>：完成标记、预算记账、进度归一都归基类。进度归一放在基类里是有原因的：提前终止（摸到终点、图不连通）时「已处理 / 总数」到不了 1，非连通图上的 Dijkstra 会停在 0.5，进度条永远差一口。</p>
+
+      <h3><span class="n">5.2</span>单步粒度是硬约束</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 290" style="--w:790" role="img" aria-label="单步粒度决定能否分帧：一步吃掉一个完整的中转点会超出帧预算，一步只推进一行则每帧都让得出去"><defs></defs>
+<text x="16" y="22" class="cap">Floyd-Warshall，V = 5000，帧预算 16ms</text>
+<text x="16" y="54" class="b t-bad">一步 = 一个中转点</text>
+<text x="16" y="70" class="mono xs mute">O(V²)</text>
+<rect x="150" y="40" width="560" height="34" rx="4" class="bad"/>
+<text x="430" y="62" class="c sm t-bad">单步几十毫秒：预算再小也让不出这一帧</text>
+<line x1="150" y1="80" x2="150" y2="86" class="ln-faint"/>
+<line x1="230" y1="80" x2="230" y2="86" class="ln-faint"/>
+<line x1="310" y1="80" x2="310" y2="86" class="ln-faint"/>
+<line x1="390" y1="80" x2="390" y2="86" class="ln-faint"/>
+<line x1="470" y1="80" x2="470" y2="86" class="ln-faint"/>
+<line x1="550" y1="80" x2="550" y2="86" class="ln-faint"/>
+<line x1="630" y1="80" x2="630" y2="86" class="ln-faint"/>
+<line x1="710" y1="80" x2="710" y2="86" class="ln-faint"/>
+<text x="150" y="98" class="c mono xs mute">0</text>
+<text x="230" y="98" class="c mono xs mute">16ms</text>
+<text x="16" y="132" class="b t-good">一步 = 一行</text>
+<text x="16" y="148" class="mono xs mute">O(V)</text>
+<rect x="152" y="118" width="64" height="34" rx="4" class="good"/>
+<text x="184" y="140" class="c xs t-good">推进</text>
+<text x="223" y="140" class="c xs mute">让</text>
+<rect x="232" y="118" width="64" height="34" rx="4" class="good"/>
+<text x="264" y="140" class="c xs t-good">推进</text>
+<text x="303" y="140" class="c xs mute">让</text>
+<rect x="312" y="118" width="64" height="34" rx="4" class="good"/>
+<text x="344" y="140" class="c xs t-good">推进</text>
+<text x="383" y="140" class="c xs mute">让</text>
+<rect x="392" y="118" width="64" height="34" rx="4" class="good"/>
+<text x="424" y="140" class="c xs t-good">推进</text>
+<text x="463" y="140" class="c xs mute">让</text>
+<rect x="472" y="118" width="64" height="34" rx="4" class="good"/>
+<text x="504" y="140" class="c xs t-good">推进</text>
+<text x="543" y="140" class="c xs mute">让</text>
+<rect x="552" y="118" width="64" height="34" rx="4" class="good"/>
+<text x="584" y="140" class="c xs t-good">推进</text>
+<text x="623" y="140" class="c xs mute">让</text>
+<rect x="632" y="118" width="64" height="34" rx="4" class="good"/>
+<text x="664" y="140" class="c xs t-good">推进</text>
+<text x="703" y="140" class="c xs mute">让</text>
+<text x="150" y="174" class="xs mute">每帧推进一批，帧间 setTimeout 让出事件循环</text>
+<text x="16" y="210" class="cap">全部算法守同一条规矩</text>
+<rect x="16" y="222" width="180" height="50" rx="4" class="box"/>
+<text x="28" y="242" class="mono sm b">bellmanFord</text>
+<text x="28" y="260" class="xs mute">一轮里的一个节点</text>
+<rect x="206" y="222" width="180" height="50" rx="4" class="box"/>
+<text x="218" y="242" class="mono sm b">closure</text>
+<text x="218" y="260" class="xs mute">一条邻接槽</text>
+<rect x="396" y="222" width="180" height="50" rx="4" class="box"/>
+<text x="408" y="242" class="mono sm b">reduction</text>
+<text x="408" y="260" class="xs mute">一条候选边</text>
+<rect x="586" y="222" width="180" height="50" rx="4" class="box"/>
+<text x="598" y="242" class="mono sm b">kruskal</text>
+<text x="598" y="260" class="xs mute">惰性堆，不先排序</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 12</span>所有 O(V+E) 及以上的算法都返回可分步推进的 <code>Task</code>。两条约束让分帧在任何规模上都成立：单步压在 O(deg) 或 O(V)，构造函数只做 O(V) 级分配，与算法同阶的准备工作一律摆进推进步里。</figcaption>
+</figure>
+
+
+      <h3><span class="n">5.3</span>驱动与组合</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>入口</th><th>做什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>settle(task, signal?)</code></td><td>同步跑完；每 4096 步检查一次中断，中断抛 <code>Interrupted</code>，现场保留可续跑</td></tr>
+            <tr><td><code>run(task, signal?)</code></td><td>异步跑完，不让出事件循环；同步与异步任务都收</td></tr>
+            <tr><td><code>schedule(task, { budget, onProgress })</code></td><td>分帧推进，帧间 <code>setTimeout</code> 让出；最后一帧会报出进度 1</td></tr>
+            <tr><td><code>chain(first, next)</code></td><td>串联两个阶段，后一段由前一段的结果构造；阶段交接时就返回，一次 <code>advance</code> 不会花掉两倍预算</td></tr>
+            <tr><td><code>transform(task, convert)</code></td><td>变换结果，不改变推进节奏</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>异步侧是平行的 <code>Future</code>，语义与 <code>Task</code> 逐条对齐，只是每一步可以 <code>await</code>。两套类型而不是一个 <code>boolean | Promise&lt;boolean&gt;</code> 联合，是因为后者会在每个同步驱动点埋雷：<code>while (task.advance(Infinity));</code> 遇到 Promise 恒为真，直接死循环，而类型上毫无异样。</p>
+    </section>
+
+    <section id="traverse">
+      <p class="part">PART 06</p>
+      <h2>遍历与拓扑</h2>
+      <p class="sub">深度优先、广度优先、拓扑排序是其余算法的骨架，这里的实现都没有递归。</p>
+
+      <h3><span class="n">6.1</span>深度优先：显式栈与边分类</h3>
+      <p><code>dfs</code> 是生成器，用显式数组栈代替递归，大图上不会撞调用栈上限。邻接逆序压栈，使出栈顺序与邻接顺序一致。需要按边分类时用 <code>visit</code>：</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 286" style="--w:790" role="img" aria-label="三色深度优先遍历：白色未访问，灰色在当前路径上，黑色已完成；指向灰色节点的边是回边，存在即成环"><defs><marker id="dfs-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="dfs-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="dfs-r" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-bad" d="M0,1L10,5L0,9z"/></marker></defs>
+<line x1="105.59" y1="76.4" x2="201.49" y2="54.27" class="ln-acc" marker-end="url(#dfs-b)"/>
+<line x1="233.82" y1="58.06" x2="323.59" y2="110.43" class="ln-acc" marker-end="url(#dfs-b)"/>
+<path d="M324.2,117.47 Q210.79,135.78 108.76,83" class="ln-bad dash" marker-end="url(#dfs-r)"/>
+<line x1="100.76" y1="91.84" x2="177.22" y2="175.94" class="ln-acc" marker-end="url(#dfs-b)"/>
+<line x1="204.5" y1="183.23" x2="322.78" y2="128.03" class="ln dash" marker-end="url(#dfs-a)"/>
+<circle cx="90" cy="80" r="14" class="pt-gray"/>
+<text x="90" y="84.5" class="c b sm">0</text>
+<circle cx="220" cy="50" r="14" class="pt-black"/>
+<text x="220" y="54.5" class="c b sm on-dark">1</text>
+<circle cx="340" cy="120" r="14" class="pt-black"/>
+<text x="340" y="124.5" class="c b sm on-dark">2</text>
+<circle cx="190" cy="190" r="14" class="pt-gray"/>
+<text x="190" y="194.5" class="c b sm">3</text>
+<text x="214" y="252" class="c sm">此刻正在检查 3 → 2</text>
+<text x="214" y="270" class="c xs mute">0、3 在路径上（灰），1、2 已完成（黑）</text>
+<circle cx="460" cy="50" r="10" class="pt"/>
+<text x="480" y="54" class="b sm">白</text>
+<text x="504" y="54" class="sm mute">未访问</text>
+<circle cx="460" cy="84" r="10" class="pt-gray"/>
+<text x="480" y="88" class="b sm">灰</text>
+<text x="504" y="88" class="sm mute">在当前 DFS 路径上</text>
+<circle cx="460" cy="118" r="10" class="pt-black"/>
+<text x="480" y="122" class="b sm">黑</text>
+<text x="504" y="122" class="sm mute">全部出边已检查完</text>
+<line x1="446" y1="168" x2="490" y2="168" class="ln-acc" marker-end="url(#dfs-b)"/>
+<text x="500" y="172" class="mono sm b">tree</text>
+<text x="550" y="172" class="sm mute">通往白色节点，进入下一层</text>
+<line x1="446" y1="200" x2="490" y2="200" class="ln-bad dash" marker-end="url(#dfs-r)"/>
+<text x="500" y="204" class="mono sm b">back</text>
+<text x="550" y="204" class="sm mute">指向灰色祖先：成环</text>
+<line x1="446" y1="232" x2="490" y2="232" class="ln dash" marker-end="url(#dfs-a)"/>
+<text x="500" y="236" class="mono sm b">cross</text>
+<text x="550" y="236" class="sm mute">指向黑色节点：横叉或前向</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 13</span><code>visit</code> 按边分类回调：树边、回边、横叉边各一个钩子。环检测因此只要一个 <code>back</code> 回调。栈是三条平行的 <code>Int32Array</code>（节点、游标、深度），每帧零分配；回调收到的是节点索引，不为每条边构造对象。</figcaption>
+</figure>
+
+      <p>访问者可以返回 <code>"prune"</code> 剪掉一棵子树，或 <code>"break"</code> 整体中止。<code>postorder</code> 就是一个只实现了 <code>finish</code> 的访问者。</p>
+
+      <h3><span class="n">6.2</span>广度优先：方向自适应</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 300" style="--w:790" role="img" aria-label="方向优化 BFS：前沿小时沿出边正向认领，前沿大时让未访问节点反向在入边里找前沿，命中即停"><defs><marker id="beamer-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="beamer-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="beamer-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<rect x="16" y="34" width="364" height="196" rx="6" class="band"/>
+<text x="30" y="56" class="b t-acc">push · 正向</text>
+<text x="30" y="74" class="xs mute">前沿沿出边认领未访问节点</text>
+<rect x="410" y="34" width="364" height="196" rx="6" class="band"/>
+<text x="424" y="56" class="b t-warm">pull · 反向</text>
+<text x="424" y="74" class="xs mute">未访问节点在入边里找前沿</text>
+<circle cx="80" cy="150" r="15" class="pt-acc"/>
+<text x="80" y="154.5" class="c b sm">f</text>
+<line x1="95.86" y1="143.88" x2="201.34" y2="103.2" class="ln-faint" marker-end="url(#beamer-a)"/>
+<circle cx="220" cy="96" r="9" class="pt-black"/>
+<text x="220" y="100.5" class="c b sm on-dark"></text>
+<line x1="96.89" y1="148.1" x2="220.13" y2="134.24" class="ln-faint" marker-end="url(#beamer-a)"/>
+<circle cx="240" cy="132" r="9" class="pt-black"/>
+<text x="240" y="136.5" class="c b sm on-dark"></text>
+<line x1="96.91" y1="151.79" x2="230.11" y2="165.89" class="ln-faint" marker-end="url(#beamer-a)"/>
+<circle cx="250" cy="168" r="9" class="pt-black"/>
+<text x="250" y="172.5" class="c b sm on-dark"></text>
+<line x1="96" y1="155.76" x2="211.18" y2="197.23" class="ln-faint" marker-end="url(#beamer-a)"/>
+<circle cx="230" cy="204" r="9" class="pt-black"/>
+<text x="230" y="208.5" class="c b sm on-dark"></text>
+<line x1="96.24" y1="144.98" x2="170.89" y2="121.91" class="ln-acc" marker-end="url(#beamer-b)"/>
+<circle cx="190" cy="116" r="9" class="pt"/>
+<text x="190" y="120.5" class="c b sm"></text>
+<text x="270" y="110" class="xs mute">已访问</text>
+<text x="270" y="126" class="xs mute">检查也要付</text>
+<text x="196" y="222" class="c xs t-bad">四次白查</text>
+<circle cx="690" cy="150" r="15" class="pt"/>
+<text x="690" y="154.5" class="c b sm">v</text>
+<line x1="581.68" y1="104.57" x2="671.56" y2="142.27" class="ln" marker-end="url(#beamer-a)"/>
+<circle cx="566" cy="98" r="9" class="pt-black"/>
+<text x="566" y="102.5" class="c b sm on-dark"></text>
+<line x1="602.92" y1="141.63" x2="670.09" y2="148.09" class="ln-warm" marker-end="url(#beamer-w)"/>
+<circle cx="586" cy="140" r="9" class="pt-acc"/>
+<text x="586" y="144.5" class="c b sm"></text>
+<line x1="592.21" y1="180.88" x2="670.93" y2="156.02" class="ln-faint dash" marker-end="url(#beamer-a)"/>
+<circle cx="576" cy="186" r="9" class="pt-black"/>
+<text x="576" y="190.5" class="c b sm on-dark"></text>
+<text x="430" y="102" class="xs mute">不是前沿</text>
+<text x="430" y="144" class="xs t-warm">命中前沿</text>
+<text x="430" y="190" class="xs mute">break，不再看</text>
+<text x="600" y="222" class="c xs t-warm">领到深度立即停</text>
+<rect x="16" y="244" width="758" height="44" rx="4" class="sunk"/>
+<text x="28" y="263" class="mono sm">切到反向：前沿出边数 × 15 &gt; 未访问区出边数</text>
+<text x="28" y="280" class="mono sm">切回正向：前沿缩回 V/18 以下且不再增长</text>
+<text x="762" y="272" class="e xs mute">Beamer · GAP 缺省阈值</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 14</span>低直径图（社交网络形状）上，前沿两三层就覆盖大半个图。这时正向扩张大部分检查都撞在已访问区，反向则让每个未访问节点找到第一个前沿邻居就 break。V=10 万的无标度图实测快 4 倍。前沿窄的图（编辑器 DAG）不会触发切换；只编出向的结构没有入边可扫，也始终走正向。</figcaption>
+</figure>
+
+
+      <h3><span class="n">6.3</span>拓扑排序</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 290" style="--w:790" role="img" aria-label="Kahn 拓扑排序：入度为 0 的节点入队，出队时把后继的入度减一，减到 0 就入队；出队序列本身就是拓扑序"><defs><marker id="kahn-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<line x1="86" y1="70" x2="181" y2="70" class="ln" marker-end="url(#kahn-a)"/>
+<line x1="82.68" y1="160.24" x2="184.94" y2="81.58" class="ln" marker-end="url(#kahn-a)"/>
+<line x1="200" y1="86" x2="200" y2="151" class="ln" marker-end="url(#kahn-a)"/>
+<line x1="86" y1="170" x2="181" y2="170" class="ln" marker-end="url(#kahn-a)"/>
+<circle cx="70" cy="70" r="14" class="pt"/>
+<text x="70" y="74.5" class="c b sm">a</text>
+<circle cx="70" cy="170" r="14" class="pt"/>
+<text x="70" y="174.5" class="c b sm">b</text>
+<circle cx="200" cy="70" r="14" class="pt"/>
+<text x="200" y="74.5" class="c b sm">c</text>
+<circle cx="200" cy="170" r="14" class="pt"/>
+<text x="200" y="174.5" class="c b sm">d</text>
+<text x="290" y="22" class="cap">每一步出队一个节点</text>
+<text x="388" y="44" class="mono xs mute">a  b  c  d</text>
+<text x="290" y="70" class="sm b">初始</text>
+<rect x="340" y="52" width="28" height="24" rx="4" class="cell"/>
+<text x="354" y="68" class="c mono sm">0</text>
+<rect x="368" y="52" width="28" height="24" rx="4" class="cell"/>
+<text x="382" y="68" class="c mono sm">0</text>
+<rect x="396" y="52" width="28" height="24" rx="4" class="cell"/>
+<text x="410" y="68" class="c mono sm">2</text>
+<rect x="424" y="52" width="28" height="24" rx="4" class="cell"/>
+<text x="438" y="68" class="c mono sm">2</text>
+<text x="470" y="69" class="mono sm">队列 [a b]</text>
+<text x="570" y="69" class="xs mute"></text>
+<text x="290" y="108" class="sm b">出 a</text>
+<rect x="340" y="90" width="28" height="24" rx="4" class="cell"/>
+<text x="354" y="106" class="c mono sm">0</text>
+<rect x="368" y="90" width="28" height="24" rx="4" class="cell"/>
+<text x="382" y="106" class="c mono sm">0</text>
+<rect x="396" y="90" width="28" height="24" rx="4" class="cell-acc"/>
+<text x="410" y="106" class="c mono sm">1</text>
+<rect x="424" y="90" width="28" height="24" rx="4" class="cell"/>
+<text x="438" y="106" class="c mono sm">2</text>
+<text x="470" y="107" class="mono sm">队列 [b]</text>
+<text x="570" y="107" class="xs mute">c 减到 1</text>
+<text x="290" y="146" class="sm b">出 b</text>
+<rect x="340" y="128" width="28" height="24" rx="4" class="cell"/>
+<text x="354" y="144" class="c mono sm">0</text>
+<rect x="368" y="128" width="28" height="24" rx="4" class="cell"/>
+<text x="382" y="144" class="c mono sm">0</text>
+<rect x="396" y="128" width="28" height="24" rx="4" class="cell-acc"/>
+<text x="410" y="144" class="c mono sm">0</text>
+<rect x="424" y="128" width="28" height="24" rx="4" class="cell-acc"/>
+<text x="438" y="144" class="c mono sm">1</text>
+<text x="470" y="145" class="mono sm">队列 [c]</text>
+<text x="570" y="145" class="xs mute">c 减到 0 入队，d 减到 1</text>
+<text x="290" y="184" class="sm b">出 c</text>
+<rect x="340" y="166" width="28" height="24" rx="4" class="cell"/>
+<text x="354" y="182" class="c mono sm">0</text>
+<rect x="368" y="166" width="28" height="24" rx="4" class="cell"/>
+<text x="382" y="182" class="c mono sm">0</text>
+<rect x="396" y="166" width="28" height="24" rx="4" class="cell"/>
+<text x="410" y="182" class="c mono sm">0</text>
+<rect x="424" y="166" width="28" height="24" rx="4" class="cell-acc"/>
+<text x="438" y="182" class="c mono sm">0</text>
+<text x="470" y="183" class="mono sm">队列 [d]</text>
+<text x="570" y="183" class="xs mute">d 减到 0 入队</text>
+<text x="290" y="222" class="sm b">出 d</text>
+<rect x="340" y="204" width="28" height="24" rx="4" class="cell"/>
+<text x="354" y="220" class="c mono sm">0</text>
+<rect x="368" y="204" width="28" height="24" rx="4" class="cell"/>
+<text x="382" y="220" class="c mono sm">0</text>
+<rect x="396" y="204" width="28" height="24" rx="4" class="cell"/>
+<text x="410" y="220" class="c mono sm">0</text>
+<rect x="424" y="204" width="28" height="24" rx="4" class="cell"/>
+<text x="438" y="220" class="c mono sm">0</text>
+<text x="470" y="221" class="mono sm">队列 []</text>
+<text x="570" y="221" class="xs mute">队空，结束</text>
+<rect x="16" y="232" width="260" height="44" rx="4" class="acc"/>
+<text x="28" y="251" class="mono b t-acc">出队序 a b c d</text>
+<text x="28" y="268" class="xs mute">队列前 tail 项即答案，不另攒数组</text>
+<rect x="290" y="232" width="484" height="44" rx="4" class="warm"/>
+<text x="302" y="251" class="sm t-warm">有环时：剩下入度非 0 的就是环上节点</text>
+<text x="302" y="268" class="xs mute">自环会把入度减成负数，所以判 !== 0 而不是 &gt; 0</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 15</span><code>topology</code> 不因环抛错，而是把环上节点单列出来；<code>toposort</code> 在它上面包一层，遇环抛 <code>Cycle</code>。入度在首步才建：缺入向时入度要 O(E) 扫出来，摆在构造函数里就成了不可中断的准备段。</figcaption>
+</figure>
+
+
+      <h3><span class="n">6.4</span>分层与关键路径</h3>
+      <p><code>generations</code> 按拓扑序扫一遍，每个节点的层号是所有前驱层号的最大值加一，然后用计数排序分桶。同层节点互无依赖，可以并行处理。</p>
+      <p><code>criticalPath</code> 是 DAG 最长路：沿拓扑序松弛，比较方向从「小于」换成「大于」。节点有执行耗时时，长度把沿途全部点权和全部边权都算进去（见图 8）。</p>
+    </section>
+
+    <section id="path">
+      <p class="part">PART 07</p>
+      <h2>最短路</h2>
+      <p class="sub">一套 Dijkstra 加五个变体。它们共用同一组判断：选哪种队列、何时提前停、负权怎么报。</p>
+
+      <h3><span class="n">7.1</span>Dijkstra 不做 decrease-key</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 276" style="--w:790" role="img" aria-label="Dijkstra 不做 decrease-key：距离改善时直接再入队一份，出队时靠 closed 位图跳过过期条目"><defs><marker id="lazy-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">v 的距离先被估成 9，后来改善到 5</text>
+<text x="16" y="54" class="b mute">decrease-key 的做法</text>
+<text x="16" y="72" class="sm mute">在堆里找到 v 那一项，把 9 改成 5，再上浮</text>
+<text x="16" y="90" class="xs mute">要维护「节点 → 堆中位置」的反查表</text>
+<text x="16" y="132" class="b t-acc">这里的做法：改善即入队</text>
+<text x="16" y="150" class="sm">堆里同时有两份 v</text>
+<rect x="220" y="126" width="76" height="34" rx="4" class="cell-acc"/>
+<text x="258" y="148" class="c mono sm">v · 5</text>
+<rect x="304" y="126" width="76" height="34" rx="4" class="cell"/>
+<text x="342" y="148" class="c mono sm">x · 7</text>
+<rect x="388" y="126" width="76" height="34" rx="4" class="cell-warm"/>
+<text x="426" y="148" class="c mono sm">v · 9</text>
+<rect x="472" y="126" width="76" height="34" rx="4" class="cell"/>
+<text x="510" y="148" class="c mono sm">y · 12</text>
+<line x1="220" y1="172" x2="556" y2="172" class="ln" marker-end="url(#lazy-a)"/>
+<text x="388" y="188" class="c xs mute">按优先级出队</text>
+<rect x="220" y="204" width="156" height="54" rx="4" class="acc"/>
+<text x="232" y="225" class="mono sm t-acc">先出 (v, 5)</text>
+<text x="232" y="243" class="xs mute">closed[v] = 1，松弛邻居</text>
+<rect x="400" y="204" width="156" height="54" rx="4" class="warm"/>
+<text x="412" y="225" class="mono sm t-warm">后出 (v, 9)</text>
+<text x="412" y="243" class="xs mute">closed[v] 已是 1，跳过</text>
+<rect x="592" y="116" width="182" height="142" rx="4" class="sunk"/>
+<text x="604" y="140" class="b">代价</text>
+<text x="604" y="162" class="sm">堆里多几项过期条目</text>
+<text x="604" y="184" class="b">换来的是</text>
+<text x="604" y="206" class="sm">不要反查表</text>
+<text x="604" y="224" class="sm">push 与 poll 都更简单</text>
+<text x="604" y="242" class="sm">全程整数下标</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 16</span>优先队列只做 push 和 poll。一个节点的距离每改善一次就再入队一份，出队时 <code>closed</code> 位图判它是否已经定过。过期条目只是多占几格，距离结果与 decrease-key 版本完全一致。</figcaption>
+</figure>
+
+
+      <h3><span class="n">7.2</span>桶队列还是堆</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 300" style="--w:790" role="img" aria-label="桶队列按距离直接下标入桶，出入队 O(1)，但游标要扫过空桶；只有四个条件同时满足时才划算"><defs></defs>
+<text x="16" y="22" class="cap">桶队列：下标就是优先级</text>
+<rect x="16" y="40" width="46" height="26" rx="4" class="cell-hole"/>
+<text x="39" y="58" class="c mono xs mute">0</text>
+<rect x="68" y="40" width="46" height="26" rx="4" class="cell-acc"/>
+<text x="91" y="58" class="c mono xs mute">1</text>
+<rect x="72" y="72" width="38" height="22" rx="4" class="box"/>
+<text x="91" y="87" class="c mono sm">a</text>
+<rect x="120" y="40" width="46" height="26" rx="4" class="cell-hole"/>
+<text x="143" y="58" class="c mono xs mute">2</text>
+<rect x="172" y="40" width="46" height="26" rx="4" class="cell-acc"/>
+<text x="195" y="58" class="c mono xs mute">3</text>
+<rect x="176" y="72" width="38" height="22" rx="4" class="box"/>
+<text x="195" y="87" class="c mono sm">b</text>
+<rect x="176" y="98" width="38" height="22" rx="4" class="box"/>
+<text x="195" y="113" class="c mono sm">c</text>
+<rect x="224" y="40" width="46" height="26" rx="4" class="cell-hole"/>
+<text x="247" y="58" class="c mono xs mute">4</text>
+<rect x="276" y="40" width="46" height="26" rx="4" class="cell-hole"/>
+<text x="299" y="58" class="c mono xs mute">5</text>
+<rect x="328" y="40" width="46" height="26" rx="4" class="cell-acc"/>
+<text x="351" y="58" class="c mono xs mute">6</text>
+<rect x="332" y="72" width="38" height="22" rx="4" class="box"/>
+<text x="351" y="87" class="c mono sm">d</text>
+<rect x="380" y="40" width="46" height="26" rx="4" class="cell-hole"/>
+<text x="403" y="58" class="c mono xs mute">7</text>
+<path d="M23,138 L23,128 L387,128 L387,138" class="ln-warm dash"/>
+<text x="205" y="152" class="c xs t-warm">游标顺序前移，空桶也要一格格扫过</text>
+<text x="205" y="168" class="c xs mute">代价 O(路径总长)，与出入队的量相比才见分晓</text>
+<text x="440" y="22" class="cap">惰性堆：O(log n)，对权重没有要求</text>
+<line x1="600" y1="52" x2="540" y2="96" class="ln-faint"/>
+<line x1="600" y1="52" x2="660" y2="96" class="ln-faint"/>
+<line x1="540" y1="96" x2="510" y2="140" class="ln-faint"/>
+<line x1="540" y1="96" x2="570" y2="140" class="ln-faint"/>
+<line x1="660" y1="96" x2="630" y2="140" class="ln-faint"/>
+<line x1="660" y1="96" x2="690" y2="140" class="ln-faint"/>
+<circle cx="600" cy="52" r="12" class="pt"/>
+<text x="600" y="56" class="c mono xs">1</text>
+<circle cx="540" cy="96" r="12" class="pt"/>
+<text x="540" y="100" class="c mono xs">3</text>
+<circle cx="660" cy="96" r="12" class="pt"/>
+<text x="660" y="100" class="c mono xs">3</text>
+<circle cx="510" cy="140" r="12" class="pt"/>
+<text x="510" y="144" class="c mono xs">6</text>
+<circle cx="570" cy="140" r="12" class="pt"/>
+<text x="570" y="144" class="c mono xs">4</text>
+<circle cx="630" cy="140" r="12" class="pt"/>
+<text x="630" y="144" class="c mono xs">8</text>
+<circle cx="690" cy="140" r="12" class="pt"/>
+<text x="690" y="144" class="c mono xs">7</text>
+<text x="16" y="202" class="cap">pick()：四个条件全满足才用桶队列</text>
+<rect x="16" y="214" width="372" height="34" rx="4" class="box"/>
+<text x="28" y="229" class="sm b">全部边权是非负整数</text>
+<text x="28" y="243" class="xs mute">下标才能当优先级</text>
+<rect x="398" y="214" width="372" height="34" rx="4" class="box"/>
+<text x="410" y="229" class="sm b">combine 是 sum 或 bottleneck</text>
+<text x="410" y="243" class="xs mute">自定义可能把优先级推出窗口</text>
+<rect x="16" y="254" width="372" height="34" rx="4" class="box"/>
+<text x="28" y="269" class="sm b">E ≥ 2V</text>
+<text x="28" y="283" class="xs mute">稀疏图摊不动空桶扫描</text>
+<rect x="398" y="254" width="372" height="34" rx="4" class="box"/>
+<text x="410" y="269" class="sm b">最大边权 ≤ 256</text>
+<text x="410" y="283" class="xs mute">路径总长随它增长</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 17</span>两种队列给出的距离完全一致，只影响耗时。判据来自边权画像：一遍 O(E) 扫出「是否全为非负整数、最大值、首条负权边」，按权重数组记忆在 <code>WeakMap</code> 上，所以 <code>reverse()</code> 每次产出的新结构共享同一份画像。顺手还拦下了 <code>NaN</code> 和负权。</figcaption>
+</figure>
+
+
+      <h3><span class="n">7.3</span>一套实现，几种路径语义</h3>
+      <p>Dijkstra 的贪心只要求一件事：<code>combine(total, step) &gt;= total</code>，也就是沿路径走，代价不会变小。满足这一点的语义都能共用同一份实现：</p>
+      <pre><code><span class="kw">const</span> sum: Combine = (total, step) =&gt; total + step;                    <span class="cm">// 常规最短路</span>
+<span class="kw">const</span> bottleneck: Combine = (total, step) =&gt; step &gt; total ? step : total; <span class="cm">// 最大边权最小的路线</span>
+
+settle(shortestPaths(snapshot, s, { combine: bottleneck }));</code></pre>
+      <p>默认的加法在内层循环里走特化分支（<code>this._adding ? base + cost : combine(base, cost)</code>），不付每条边一次的间接调用。</p>
+
+      <h3><span class="n">7.4</span>A* 与提前终止</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 272" style="--w:790" role="img" aria-label="A* 以 g + h 为优先级；终点第一次出队时 h 是常量，此时的 g 就是最短距离，搜索立即停止"><defs><marker id="astar-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="astar-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<circle cx="60" cy="130" r="16" class="pt-acc"/>
+<text x="60" y="134.5" class="c b sm">s</text>
+<circle cx="420" cy="130" r="16" class="pt-warm"/>
+<text x="420" y="134.5" class="c b sm">t</text>
+<line x1="75.8" y1="121.38" x2="151.56" y2="80.06" class="ln-faint" marker-end="url(#astar-a)"/>
+<line x1="78" y1="130" x2="169" y2="130" class="ln-faint" marker-end="url(#astar-a)"/>
+<line x1="75.43" y1="139.26" x2="151.99" y2="185.2" class="ln-faint" marker-end="url(#astar-a)"/>
+<line x1="205.12" y1="124.78" x2="282.04" y2="98.2" class="ln-acc" marker-end="url(#astar-b)"/>
+<line x1="317.16" y1="97.43" x2="399.98" y2="123.66" class="ln-acc" marker-end="url(#astar-b)"/>
+<line x1="185.64" y1="192.65" x2="291.42" y2="169.98" class="ln-faint" marker-end="url(#astar-a)"/>
+<line x1="78" y1="130" x2="169" y2="130" class="ln-acc" marker-end="url(#astar-b)"/>
+<circle cx="170" cy="70" r="10" class="pt"/>
+<text x="170" y="74.5" class="c b sm"></text>
+<circle cx="190" cy="130" r="10" class="pt"/>
+<text x="190" y="134.5" class="c b sm"></text>
+<circle cx="170" cy="196" r="10" class="pt"/>
+<text x="170" y="200.5" class="c b sm"></text>
+<circle cx="300" cy="92" r="10" class="pt"/>
+<text x="300" y="96.5" class="c b sm"></text>
+<circle cx="310" cy="166" r="10" class="pt"/>
+<text x="310" y="170.5" class="c b sm"></text>
+<text x="300" y="60" class="c mono xs">g = 7</text>
+<text x="300" y="72" class="c mono xs t-warm">h = 3</text>
+<text x="170" y="222" class="c xs mute">h 大，排在后面</text>
+<rect x="480" y="34" width="294" height="92" rx="4" class="acc"/>
+<text x="494" y="58" class="mono sm b t-acc">priority(v) = g(v) + h(v)</text>
+<text x="494" y="80" class="sm">g：起点到 v 已知的最短代价</text>
+<text x="494" y="100" class="sm">h：v 到终点的估计，不高估时结果最优</text>
+<rect x="480" y="138" width="294" height="56" rx="4" class="warm"/>
+<text x="494" y="160" class="mono sm t-warm">u === target 时立即返回</text>
+<text x="494" y="180" class="xs mute">只给这一条路线，不给路径树</text>
+<rect x="480" y="206" width="294" height="50" rx="4" class="sunk"/>
+<text x="494" y="226" class="sm b">shortestPath = 不带启发式的 A*</text>
+<text x="494" y="244" class="xs mute">h ≡ 0，共用同一套提前终止的机器</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 18</span>提前终止的搜索只探索一小片图，所以 A* 与 <code>shortestPath</code> 逐边现取现验边权，而不是入口处预扫全部边——预扫往往比实际访问到的边还多。它们也刻意只返回一条路线：提前终止时其他节点的距离还没收敛，类型上就不给你读。</figcaption>
+</figure>
+
+
+      <h3><span class="n">7.5</span>双向搜索</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 280" style="--w:790" role="img" aria-label="双向 Dijkstra：两侧交替扩展，两侧已出队的最小距离之和不小于当前最优时停止"><defs><marker id="bidi-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="bidi-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<ellipse cx="170" cy="130" rx="130" ry="84" class="ring-acc"/>
+<ellipse cx="440" cy="130" rx="130" ry="84" class="ring-warm"/>
+<circle cx="90" cy="130" r="15" class="pt-acc"/>
+<text x="90" y="134.5" class="c b sm">s</text>
+<circle cx="520" cy="130" r="15" class="pt-warm"/>
+<text x="520" y="134.5" class="c b sm">t</text>
+<circle cx="305" cy="130" r="13" class="pt-good"/>
+<text x="305" y="134.5" class="c b sm">m</text>
+<line x1="107" y1="130" x2="285" y2="130" class="ln-acc" marker-end="url(#bidi-b)"/>
+<line x1="503" y1="130" x2="325" y2="130" class="ln-warm" marker-end="url(#bidi-w)"/>
+<text x="170" y="64" class="c xs t-acc">正向前沿</text>
+<text x="440" y="64" class="c xs t-warm">反向前沿（走入边）</text>
+<text x="305" y="166" class="c xs t-good">相遇点</text>
+<text x="305" y="226" class="c mono sm">best = min( dist_f(u) + dist_b(u) )</text>
+<text x="305" y="244" class="c xs mute">每次松弛与出队都顺手更新</text>
+<rect x="600" y="34" width="174" height="230" rx="4" class="sunk"/>
+<text x="612" y="58" class="b">停止条件</text>
+<text x="612" y="82" class="mono sm t-acc">frontier_f</text>
+<text x="612" y="100" class="mono sm t-warm">+ frontier_b</text>
+<text x="612" y="118" class="mono sm b">≥ best</text>
+<text x="612" y="150" class="xs mute">frontier 取的是</text>
+<text x="612" y="166" class="xs mute">「已出队的最小距离」</text>
+<text x="612" y="190" class="xs mute">惰性堆的堆顶可能是</text>
+<text x="612" y="206" class="xs mute">过期条目，不可信；</text>
+<text x="612" y="222" class="xs mute">已出队的值单调不减，</text>
+<text x="612" y="238" class="xs t-good">必然可信</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 19</span>每轮挑前沿较小的一侧扩展。终止判据要比较两侧前沿之和，而惰性堆不做 decrease-key、堆顶可能已经过期，所以这里另记一个 <code>frontier</code>：它是该侧最后出队的距离，单调不减，用作判据是安全的。</figcaption>
+</figure>
+
+
+      <h3><span class="n">7.6</span>负权：Bellman-Ford 与 Floyd-Warshall</h3>
+      <p>Dijkstra 遇到负权边直接抛 <code>Negative</code>，并点名改用 <code>bellmanFord</code>：负权下贪心不成立，硬跑只会给出错误的距离。</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 290" style="--w:790" role="img" aria-label="Bellman-Ford：第 V 轮仍有改善就说明存在负环；从最后被松弛的节点沿前驱走 V 步必然落在环上"><defs><marker id="bf-r" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-bad" d="M0,1L10,5L0,9z"/></marker><marker id="bf-w" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-warm" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">一步 = 一轮松弛里的一个节点，轮次边界单独占一步</text>
+<rect x="16" y="36" width="104" height="30" rx="4" class="box"/>
+<text x="68" y="56" class="c sm ">第 1 轮</text>
+<rect x="128" y="36" width="104" height="30" rx="4" class="box"/>
+<text x="180" y="56" class="c sm ">第 2 轮</text>
+<rect x="240" y="36" width="104" height="30" rx="4" class="box"/>
+<text x="292" y="56" class="c sm ">第 3 轮</text>
+<rect x="352" y="36" width="104" height="30" rx="4" class="warm"/>
+<text x="404" y="56" class="c sm t-warm b">第 V 轮</text>
+<text x="470" y="56" class="sm t-warm">这一轮仍有改善 ⇒ 存在从起点可达的负环</text>
+<text x="16" y="102" class="cap">归因：沿 parent 链回溯</text>
+<circle cx="60" cy="170" r="18" class="pt-warm"/>
+<text x="60" y="174.5" class="c b sm">last</text>
+<circle cx="150" cy="170" r="12" class="pt"/>
+<text x="150" y="174.5" class="c b sm"></text>
+<line x1="80" y1="170" x2="127" y2="170" class="ln-warm" marker-end="url(#bf-w)"/>
+<line x1="163.51" y1="166.32" x2="243.6" y2="144.47" class="ln-warm" marker-end="url(#bf-w)"/>
+<line x1="273.58" y1="136.6" x2="323.51" y2="124.12" class="ln-bad" marker-end="url(#bf-r)"/>
+<line x1="350.76" y1="128.96" x2="386.94" y2="159.12" class="ln-bad" marker-end="url(#bf-r)"/>
+<line x1="389.24" y1="178.96" x2="353.06" y2="209.12" class="ln-bad" marker-end="url(#bf-r)"/>
+<line x1="326.42" y1="216.6" x2="276.49" y2="204.12" class="ln-bad" marker-end="url(#bf-r)"/>
+<line x1="260" y1="186" x2="260" y2="157" class="ln-bad" marker-end="url(#bf-r)"/>
+<circle cx="260" cy="140" r="12" class="pt-bad"/>
+<text x="260" y="144.5" class="c b sm"></text>
+<circle cx="340" cy="120" r="12" class="pt-bad"/>
+<text x="340" y="124.5" class="c b sm"></text>
+<circle cx="400" cy="170" r="12" class="pt-bad"/>
+<text x="400" y="174.5" class="c b sm"></text>
+<circle cx="340" cy="220" r="12" class="pt-bad"/>
+<text x="340" y="224.5" class="c b sm"></text>
+<circle cx="260" cy="200" r="12" class="pt-bad"/>
+<text x="260" y="204.5" class="c b sm"></text>
+<text x="330" y="260" class="c xs t-bad">parent 链必然绕回环上</text>
+<text x="105" y="200" class="c xs t-warm">沿 parent 走</text>
+<rect x="470" y="102" width="304" height="176" rx="4" class="sunk"/>
+<text x="484" y="126" class="b">为什么走 V 步一定在环上</text>
+<text x="484" y="150" class="sm">parent 链上没有 -1 时，</text>
+<text x="484" y="168" class="sm">V 个节点走 V 步必然重复，</text>
+<text x="484" y="186" class="sm">落点就在那个回路上。</text>
+<text x="484" y="214" class="sm">之后再绕一圈，</text>
+<text x="484" y="232" class="sm">收集到的就是环的全部成员，</text>
+<text x="484" y="250" class="sm">随 Cycle 错误一起抛出。</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 20</span>一整轮松弛是 O(E)，在稠密图上比其他算法的单步粗一个数量级，分帧时会卡出可见的掉帧，所以一步只松弛一个节点的出边。收敛判定与负环判定都落在轮次边界那一步：一整轮没有改善即收敛，第 V 轮还在改善就是负环。</figcaption>
+</figure>
+
+      <p><code>floydWarshall</code> 求全源最短路，矩阵是 <code>8·V²</code> 字节，V=10000 就是 763MB。分配前先过一道规模闸门，默认上限 512MB，超限抛 <code>Oversized</code> 并报出申请量。它的一步是「一个中转点的一行」，O(V)（见图 12）；铺底也拆成每步一行。跑完后检查对角线，出现负值即有负环。</p>
+    </section>
+
+    <section id="connect">
+      <p class="part">PART 08</p>
+      <h2>连通、割与支配</h2>
+      <p class="sub">四个都是基于 DFS 的经典算法，这里全部改写成了迭代版，状态压在平行 <code>Int32Array</code> 上。</p>
+
+      <h3><span class="n">8.1</span>弱连通与强连通</h3>
+      <p>弱连通忽略方向：从未标记的节点出发，沿出边和入边一起扩张。缺入向时只能沿出边走，得到的是按可达性分组而不是弱连通分量，所以它走 <code>mirror</code>（见图 9）。起点用 <code>seek</code> 挑：游标只增不减，整趟扫描摊销 O(V)，每轮从 0 重找就是 O(V²)。</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 292" style="--w:790" role="img" aria-label="Pearce 强连通分量：一条 rindex 数组兼作三种状态，低链值没被压低的节点就是分量根"><defs><marker id="pearce-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="pearce-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<line x1="85.78" y1="77.37" x2="171.26" y2="63.12" class="ln-acc" marker-end="url(#pearce-b)"/>
+<line x1="190" y1="76" x2="190" y2="141" class="ln-acc" marker-end="url(#pearce-b)"/>
+<line x1="176.69" y1="151.12" x2="85.81" y2="90.54" class="ln-acc" marker-end="url(#pearce-b)"/>
+<line x1="206" y1="160" x2="301" y2="160" class="ln" marker-end="url(#pearce-a)"/>
+<circle cx="70" cy="80" r="14" class="pt-acc"/>
+<text x="70" y="84.5" class="c b sm">0</text>
+<text x="70" y="58" class="c mono xs t-acc">rindex=1</text>
+<circle cx="190" cy="60" r="14" class="pt-acc"/>
+<text x="190" y="64.5" class="c b sm">1</text>
+<text x="190" y="38" class="c mono xs t-acc">rindex=1</text>
+<circle cx="190" cy="160" r="14" class="pt-acc"/>
+<text x="190" y="164.5" class="c b sm">2</text>
+<text x="190" y="192" class="c mono xs t-acc">rindex=1</text>
+<circle cx="320" cy="160" r="14" class="pt-warm"/>
+<text x="320" y="164.5" class="c b sm">3</text>
+<text x="320" y="192" class="c mono xs t-warm">rindex=-1</text>
+<rect x="36" y="206" width="196" height="40" rx="4" class="acc"/>
+<text x="134" y="223" class="c sm b t-acc">分量 1：{0, 1, 2}</text>
+<text x="134" y="239" class="c xs mute">低链值全被压到 1</text>
+<rect x="256" y="206" width="120" height="40" rx="4" class="warm"/>
+<text x="316" y="223" class="c sm b t-warm">分量 0：{3}</text>
+<text x="316" y="239" class="c xs mute">最先完成</text>
+<text x="420" y="22" class="cap">rindex[u] 的三种取值</text>
+<rect x="420" y="34" width="354" height="36" rx="4" class="box"/>
+<text x="436" y="57" class="mono sm b">0</text>
+<text x="484" y="57" class="sm">未访问</text>
+<rect x="420" y="78" width="354" height="36" rx="4" class="acc"/>
+<text x="436" y="101" class="mono sm b">&gt; 0</text>
+<text x="484" y="101" class="sm">先序值；回边与子节点的低链会把它压低</text>
+<rect x="420" y="122" width="354" height="36" rx="4" class="warm"/>
+<text x="436" y="145" class="mono sm b">&lt; 0</text>
+<text x="484" y="145" class="sm">已归入分量，值为 -(编号+1)</text>
+<rect x="420" y="170" width="354" height="76" rx="4" class="sunk"/>
+<text x="434" y="192" class="sm">完成节点 u 时：rindex[u] 仍等于入栈时的先序值</text>
+<text x="434" y="212" class="sm t-acc">⇒ u 是分量根，弹出路径栈上它之上的全部成员</text>
+<text x="434" y="234" class="xs mute">一条数组省掉 Tarjan 的 lowlink 与 onStack 两条</text>
+<text x="16" y="278" class="xs t-warm">分量编号按逆拓扑序递增：汇点分量先完成、先编号——传递闭包靠的就是这一点</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 21</span>Pearce 2016 的迭代版本。DFS 栈是四条平行的 <code>Int32Array</code>（节点、先序值、游标、待回收的子节点），每帧零分配，所以整个搜索在任意一步都能安全暂停。分量按完成顺序编号，汇点分量最先完成，于是编号恰好是逆拓扑序。</figcaption>
+</figure>
+
+      <p><code>condensation</code> 在 SCC 之上把每个分量收缩成一个节点，得到无环的凝聚图。分量间的边按 <code>from · count + to</code> 去重：count 小于 2²⁶ 时这个键不超过 2⁵³，精确无误。</p>
+
+      <h3><span class="n">8.2</span>枚举简单环</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 290" style="--w:790" role="img" aria-label="Johnson 枚举简单环：走过的节点被阻塞，没找到环的节点挂进后继的 B 列表，后继解封时连锁解封"><defs><marker id="johnson-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="johnson-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="johnson-g" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-good" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">先缩点：环不可能跨分量，搜索只在起点所属的强连通分量里进行</text>
+<line x1="84.57" y1="113.38" x2="162.7" y2="77.86" class="ln-acc" marker-end="url(#johnson-b)"/>
+<line x1="196" y1="70" x2="281" y2="70" class="ln" marker-end="url(#johnson-a)"/>
+<line x1="84.05" y1="127.66" x2="163.32" y2="170.9" class="ln-acc" marker-end="url(#johnson-b)"/>
+<path d="M165.95,172.34 Q112.91,175.3 86.68,129.1" class="ln-good" marker-end="url(#johnson-g)"/>
+<line x1="288.21" y1="80.81" x2="194.01" y2="167.16" class="ln-faint dash" marker-end="url(#johnson-a)"/>
+<circle cx="70" cy="120" r="14" class="pt-acc"/>
+<text x="70" y="124.5" class="c b sm">s</text>
+<circle cx="180" cy="70" r="14" class="pt-warm"/>
+<text x="180" y="74.5" class="c b sm">a</text>
+<circle cx="300" cy="70" r="14" class="pt-warm"/>
+<text x="300" y="74.5" class="c b sm">b</text>
+<circle cx="180" cy="180" r="14" class="pt-good"/>
+<text x="180" y="184.5" class="c b sm">c</text>
+<text x="240" y="46" class="c xs t-warm">从 a 出发没找到环</text>
+<text x="240" y="122" class="c xs mute">a、b 保持阻塞</text>
+<text x="108" y="218" class="c xs t-good">找到环 s→c→s</text>
+<rect x="380" y="34" width="394" height="92" rx="4" class="warm"/>
+<text x="394" y="58" class="mono sm b t-warm">blocked[v]</text>
+<text x="394" y="78" class="sm">已在当前路径上，或从它出发注定找不到环</text>
+<text x="394" y="98" class="xs mute">被阻塞的节点不再进入，剪掉的是指数级的重复搜索</text>
+<rect x="380" y="136" width="394" height="92" rx="4" class="acc"/>
+<text x="394" y="160" class="mono sm b t-acc">B 列表：noEntry[w] = { 等 w 解封的节点 }</text>
+<text x="394" y="180" class="sm">v 没找到环时，把 v 挂到它每个后继 w 的列表上</text>
+<text x="394" y="200" class="xs mute">w 解封 ⇒ 列表里的 v 跟着解封，逐级连锁</text>
+<text x="16" y="268" class="xs mute">B 列表用 Set：unblock 要反复判成员，线性查找会打破复杂度界；按需才建，DAG 上不白分配 V 个 Set</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 22</span>环的数量可能随规模爆炸，所以 <code>simpleCycles</code> 务必配合中断使用。它先跑一遍 <code>scc</code>：单成员且没有自环的分量直接跳过，DAG 上因此只剩一遍 O(V+E)。</figcaption>
+</figure>
+
+
+      <h3><span class="n">8.3</span>桥与割点</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 290" style="--w:790" role="img" aria-label="Tarjan 桥与割点：low 值是子树经一条返祖边能回到的最早发现时间，与父节点的发现时间比较即可判定"><defs></defs>
+<line x1="83.72" y1="78.23" x2="153.71" y2="120.22" class="ln"/>
+<line x1="156.28" y1="138.23" x2="86.29" y2="180.22" class="ln"/>
+<line x1="70" y1="174" x2="70" y2="89" class="ln"/>
+<line x1="313.72" y1="121.77" x2="383.71" y2="79.78" class="ln"/>
+<line x1="400" y1="86" x2="400" y2="171" class="ln"/>
+<line x1="386.28" y1="181.77" x2="316.29" y2="139.78" class="ln"/>
+<line x1="186" y1="130" x2="281" y2="130" class="ln-bad"/>
+<text x="235" y="120" class="c b t-bad">桥</text>
+<circle cx="70" cy="70" r="14" class="pt"/>
+<text x="70" y="74.5" class="c b sm">0</text>
+<text x="70" y="100" class="c mono xs mute">0 / 0</text>
+<circle cx="170" cy="130" r="14" class="pt-warm"/>
+<text x="170" y="134.5" class="c b sm">1</text>
+<text x="170" y="160" class="c mono xs mute">1 / 0</text>
+<circle cx="70" cy="190" r="14" class="pt"/>
+<text x="70" y="194.5" class="c b sm">2</text>
+<text x="70" y="220" class="c mono xs mute">2 / 0</text>
+<circle cx="300" cy="130" r="14" class="pt-warm"/>
+<text x="300" y="134.5" class="c b sm">3</text>
+<text x="300" y="160" class="c mono xs mute">3 / 3</text>
+<circle cx="400" cy="70" r="14" class="pt"/>
+<text x="400" y="74.5" class="c b sm">4</text>
+<text x="400" y="100" class="c mono xs mute">4 / 3</text>
+<circle cx="400" cy="190" r="14" class="pt"/>
+<text x="400" y="194.5" class="c b sm">5</text>
+<text x="400" y="220" class="c mono xs mute">5 / 3</text>
+<text x="70" y="262" class="xs mute">节点下方：disc / low</text>
+<text x="235" y="172" class="c xs t-warm">1 与 3 是割点</text>
+<rect x="470" y="34" width="304" height="70" rx="4" class="bad"/>
+<text x="484" y="58" class="mono sm b t-bad">low[child] &gt; disc[u]</text>
+<text x="484" y="78" class="sm">子树回不到 u 及以上 ⇒ (u, child) 是桥</text>
+<text x="484" y="94" class="mono xs mute">边 1–3：low[3]=3 &gt; disc[1]=1</text>
+<rect x="470" y="114" width="304" height="70" rx="4" class="warm"/>
+<text x="484" y="138" class="mono sm b t-warm">low[child] ≥ disc[u]，u 不是根</text>
+<text x="484" y="158" class="sm">子树只能回到 u 本身 ⇒ u 是割点</text>
+<text x="484" y="174" class="mono xs mute">节点 3：low[4]=3 ≥ disc[3]=3</text>
+<rect x="470" y="194" width="304" height="70" rx="4" class="sunk"/>
+<text x="484" y="218" class="sm b">根节点：DFS 子树 ≥ 2 才是割点</text>
+<text x="484" y="238" class="xs mute">平行边靠边序号区分：不沿来路返回，</text>
+<text x="484" y="252" class="xs mute">但另一条平行边仍算返祖边，不误判为桥</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 23</span>无向视角下的一遍 DFS。有向结构会自动合并两个方向（走 <code>mirror</code>，无向编译时不重复扫）。判断「是不是来路」看的是边序号而不是父节点，所以两点间的重边不会被误报成桥。</figcaption>
+</figure>
+
+
+      <h3><span class="n">8.4</span>支配树</h3>
+      <p>在控制流图里，入口到 <code>v</code> 的每条路径都经过 <code>d</code> 时，称 <code>d</code> 支配 <code>v</code>。离 <code>v</code> 最近的那个支配点就是直接支配点 <code>idom[v]</code>，所有 idom 连起来是一棵树。</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 286" style="--w:790" role="img" aria-label="Lengauer-Tarjan 支配树：DFS 编号、逆先序求半支配点、顺序收敛三个阶段共享一个游标"><defs><marker id="lt-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker><marker id="lt-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">控制流图</text>
+<line x1="62.56" y1="73.02" x2="38.93" y2="114.37" class="ln" marker-end="url(#lt-a)"/>
+<line x1="77.44" y1="73.02" x2="101.07" y2="114.37" class="ln" marker-end="url(#lt-a)"/>
+<line x1="37.77" y1="142.83" x2="60.67" y2="180.61" class="ln" marker-end="url(#lt-a)"/>
+<line x1="102.23" y1="142.83" x2="79.33" y2="180.61" class="ln" marker-end="url(#lt-a)"/>
+<line x1="70" y1="211" x2="70" y2="244" class="ln" marker-end="url(#lt-a)"/>
+<circle cx="70" cy="60" r="13" class="pt-acc"/>
+<text x="70" y="64.5" class="c b sm">0</text>
+<circle cx="30" cy="130" r="13" class="pt"/>
+<text x="30" y="134.5" class="c b sm">1</text>
+<circle cx="110" cy="130" r="13" class="pt"/>
+<text x="110" y="134.5" class="c b sm">2</text>
+<circle cx="70" cy="196" r="13" class="pt"/>
+<text x="70" y="200.5" class="c b sm">3</text>
+<circle cx="70" cy="262" r="13" class="pt"/>
+<text x="70" y="266.5" class="c b sm">4</text>
+<text x="190" y="22" class="cap">支配树</text>
+<line x1="241.28" y1="72.21" x2="210.46" y2="115.35" class="ln-acc" marker-end="url(#lt-b)"/>
+<line x1="250" y1="75" x2="250" y2="112" class="ln-acc" marker-end="url(#lt-b)"/>
+<line x1="258.72" y1="72.21" x2="289.54" y2="115.35" class="ln-acc" marker-end="url(#lt-b)"/>
+<line x1="300" y1="145" x2="300" y2="182" class="ln-acc" marker-end="url(#lt-b)"/>
+<circle cx="250" cy="60" r="13" class="pt-acc"/>
+<text x="250" y="64.5" class="c b sm">0</text>
+<circle cx="200" cy="130" r="13" class="pt"/>
+<text x="200" y="134.5" class="c b sm">1</text>
+<circle cx="250" cy="130" r="13" class="pt"/>
+<text x="250" y="134.5" class="c b sm">2</text>
+<circle cx="300" cy="130" r="13" class="pt"/>
+<text x="300" y="134.5" class="c b sm">3</text>
+<circle cx="300" cy="200" r="13" class="pt"/>
+<text x="300" y="204.5" class="c b sm">4</text>
+<text x="250" y="238" class="c xs mute">3 的直接支配点是 0，</text>
+<text x="250" y="254" class="c xs mute">因为 1、2 两条路都能到 3</text>
+<rect x="370" y="34" width="404" height="60" rx="4" class="box"/>
+<text x="384" y="56" class="mono xs mute">阶段 0</text>
+<text x="440" y="56" class="sm b">DFS 先序编号</text>
+<text x="384" y="78" class="xs">记下 order / number / parent</text>
+<rect x="370" y="104" width="404" height="60" rx="4" class="acc"/>
+<text x="384" y="126" class="mono xs mute">阶段 1</text>
+<text x="440" y="126" class="sm b">逆先序求半支配点</text>
+<text x="384" y="148" class="xs">走入边，带路径压缩的 evaluate；填桶并结算父节点的桶</text>
+<rect x="370" y="174" width="404" height="60" rx="4" class="warm"/>
+<text x="384" y="196" class="mono xs mute">阶段 2</text>
+<text x="440" y="196" class="sm b">顺序收敛</text>
+<text x="384" y="218" class="xs">idom[w] ≠ semi[w] 时 idom[w] ← idom[idom[w]]</text>
+<text x="370" y="260" class="xs mute">半支配点的桶是一对 Int32Array 组成的侵入式单链表：每个节点同时只属于一个桶</text>
+<text x="370" y="276" class="xs mute">进度按三段各占三分之一归一；阶段 1 的游标倒着走，进度要用 1 - cursor/counted</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 24</span>只覆盖从入口可达的节点：入口的直接支配点指向自身，不可达节点为 -1。半支配点靠前驱求，缺入向会让每个节点的 idom 退化成它的 DFS 父节点，所以构造时就过 <code>inboundOf</code>。</figcaption>
+</figure>
+
+    </section>
+
+    <section id="reach">
+      <p class="part">PART 09</p>
+      <h2>可达与生成森林</h2>
+      <p class="sub">可达性的三个算法一层叠一层：闭包要先缩点，归约要先有闭包。</p>
+
+      <h3><span class="n">9.1</span>两点可达与传递闭包</h3>
+      <p>只问一对点时用 <code>reachable</code>：双向 BFS，每轮扩张较小的那一侧，两侧一碰面就停。没有入向时退回单向 DFS。</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 292" style="--w:790" role="img" aria-label="传递闭包按强连通分量存位图：分量按逆拓扑序处理，后继分量的行已经终局，一遍位或即收敛"><defs><marker id="closure-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">缩点后的 DAG（逆拓扑序编号）</text>
+<line x1="91.44" y1="85.05" x2="175.64" y2="65.62" class="ln" marker-end="url(#closure-a)"/>
+<line x1="89.37" y1="100.43" x2="177.99" y2="148.15" class="ln" marker-end="url(#closure-a)"/>
+<line x1="200" y1="82" x2="200" y2="135" class="ln" marker-end="url(#closure-a)"/>
+<circle cx="70" cy="90" r="20" class="pt-acc"/>
+<text x="70" y="94.5" class="c b sm">C2</text>
+<circle cx="200" cy="60" r="20" class="pt"/>
+<text x="200" y="64.5" class="c b sm">C1</text>
+<circle cx="200" cy="160" r="20" class="pt"/>
+<text x="200" y="164.5" class="c b sm">C0</text>
+<text x="70" y="128" class="c xs t-acc">正在处理</text>
+<text x="290" y="22" class="cap">每个分量一行位图（V = 8 个节点）</text>
+<text x="316" y="58" class="e mono sm b">C0</text>
+<rect x="322" y="40" width="24" height="26" rx="4" class="cell"/>
+<text x="334" y="57" class="c mono sm">0</text>
+<rect x="346" y="40" width="24" height="26" rx="4" class="cell"/>
+<text x="358" y="57" class="c mono sm">0</text>
+<rect x="370" y="40" width="24" height="26" rx="4" class="cell"/>
+<text x="382" y="57" class="c mono sm">0</text>
+<rect x="394" y="40" width="24" height="26" rx="4" class="cell"/>
+<text x="406" y="57" class="c mono sm">0</text>
+<rect x="418" y="40" width="24" height="26" rx="4" class="cell"/>
+<text x="430" y="57" class="c mono sm">0</text>
+<rect x="442" y="40" width="24" height="26" rx="4" class="cell"/>
+<text x="454" y="57" class="c mono sm">0</text>
+<rect x="466" y="40" width="24" height="26" rx="4" class="cell-warm"/>
+<text x="478" y="57" class="c mono sm">1</text>
+<rect x="490" y="40" width="24" height="26" rx="4" class="cell-warm"/>
+<text x="502" y="57" class="c mono sm">1</text>
+<text x="522" y="58" class="mono xs mute">最先处理，没有后继</text>
+<text x="316" y="102" class="e mono sm b">C1</text>
+<rect x="322" y="84" width="24" height="26" rx="4" class="cell"/>
+<text x="334" y="101" class="c mono sm">0</text>
+<rect x="346" y="84" width="24" height="26" rx="4" class="cell"/>
+<text x="358" y="101" class="c mono sm">0</text>
+<rect x="370" y="84" width="24" height="26" rx="4" class="cell"/>
+<text x="382" y="101" class="c mono sm">0</text>
+<rect x="394" y="84" width="24" height="26" rx="4" class="cell-warm"/>
+<text x="406" y="101" class="c mono sm">1</text>
+<rect x="418" y="84" width="24" height="26" rx="4" class="cell-warm"/>
+<text x="430" y="101" class="c mono sm">1</text>
+<rect x="442" y="84" width="24" height="26" rx="4" class="cell"/>
+<text x="454" y="101" class="c mono sm">0</text>
+<rect x="466" y="84" width="24" height="26" rx="4" class="cell-warm"/>
+<text x="478" y="101" class="c mono sm">1</text>
+<rect x="490" y="84" width="24" height="26" rx="4" class="cell-warm"/>
+<text x="502" y="101" class="c mono sm">1</text>
+<text x="522" y="102" class="mono xs mute">|= row(C0)</text>
+<text x="316" y="146" class="e mono sm b">C2</text>
+<rect x="322" y="128" width="24" height="26" rx="4" class="cell"/>
+<text x="334" y="145" class="c mono sm">0</text>
+<rect x="346" y="128" width="24" height="26" rx="4" class="cell-acc"/>
+<text x="358" y="145" class="c mono sm">1</text>
+<rect x="370" y="128" width="24" height="26" rx="4" class="cell-acc"/>
+<text x="382" y="145" class="c mono sm">1</text>
+<rect x="394" y="128" width="24" height="26" rx="4" class="cell-acc"/>
+<text x="406" y="145" class="c mono sm">1</text>
+<rect x="418" y="128" width="24" height="26" rx="4" class="cell-acc"/>
+<text x="430" y="145" class="c mono sm">1</text>
+<rect x="442" y="128" width="24" height="26" rx="4" class="cell-acc"/>
+<text x="454" y="145" class="c mono sm">1</text>
+<rect x="466" y="128" width="24" height="26" rx="4" class="cell-acc"/>
+<text x="478" y="145" class="c mono sm">1</text>
+<rect x="490" y="128" width="24" height="26" rx="4" class="cell-acc"/>
+<text x="502" y="145" class="c mono sm">1</text>
+<text x="522" y="146" class="mono xs t-acc">|= row(C1) | row(C0)</text>
+<text x="322" y="182" class="xs t-acc">C2 的两个后继早已算完，不必再搜一遍</text>
+<rect x="16" y="204" width="370" height="74" rx="4" class="sunk"/>
+<text x="28" y="226" class="b">为什么按分量存一行</text>
+<text x="28" y="246" class="sm">同一个强连通分量里的节点互相可达，</text>
+<text x="28" y="264" class="sm">它们的可达集完全相同</text>
+<rect x="404" y="204" width="370" height="74" rx="4" class="warm"/>
+<text x="416" y="226" class="b t-warm">内存闸门落在推进途中</text>
+<text x="416" y="246" class="sm">位图是 分量数 × ⌈V/32⌉ 字，要等 scc 跑完才知道</text>
+<text x="416" y="264" class="xs mute">无环图上分量数 = V，V=10 万就是 1.2GB</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 25</span>复杂度 O(V + E·V/32)。逐个节点各跑一次可达搜索是 O(V·(V+E))，按分量逆拓扑序传播省掉了一个数量级。一步只消费一条邻接槽，跨分量时做一次 O(V/32) 的行位或，强连通占主导的图上单步也压在 O(V)。</figcaption>
+</figure>
+
+
+      <h3><span class="n">9.2</span>传递归约</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 252" style="--w:790" role="img" aria-label="传递归约：u→v 能由 u 的另一个直接后继间接抵达时，这条边是多余的"><defs><marker id="reduce-b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-acc" d="M0,1L10,5L0,9z"/></marker><marker id="reduce-r" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah-bad" d="M0,1L10,5L0,9z"/></marker></defs>
+<line x1="94.31" y1="122.84" x2="203.01" y2="68.5" class="ln-acc" marker-end="url(#reduce-b)"/>
+<line x1="94.31" y1="137.16" x2="203.01" y2="191.5" class="ln-acc" marker-end="url(#reduce-b)"/>
+<line x1="234.31" y1="67.16" x2="343.01" y2="121.5" class="ln-acc" marker-end="url(#reduce-b)"/>
+<line x1="234.31" y1="192.84" x2="343.01" y2="138.5" class="ln-acc" marker-end="url(#reduce-b)"/>
+<line x1="96" y1="130" x2="341" y2="130" class="ln-bad dash" marker-end="url(#reduce-r)"/>
+<circle cx="80" cy="130" r="14" class="pt"/>
+<text x="80" y="134.5" class="c b sm">u</text>
+<circle cx="220" cy="60" r="14" class="pt"/>
+<text x="220" y="64.5" class="c b sm">a</text>
+<circle cx="220" cy="200" r="14" class="pt"/>
+<text x="220" y="204.5" class="c b sm">b</text>
+<circle cx="360" cy="130" r="14" class="pt"/>
+<text x="360" y="134.5" class="c b sm">c</text>
+<text x="220" y="118" class="c xs t-bad">u→c 被删</text>
+<text x="220" y="150" class="c xs mute">a 能到 c</text>
+<rect x="440" y="34" width="334" height="86" rx="4" class="acc"/>
+<text x="454" y="58" class="mono sm b t-acc">_bypassed(u, v)</text>
+<text x="454" y="80" class="sm">对 u 的每个直接后继 r ≠ v，</text>
+<text x="454" y="98" class="sm">查闭包 closure.linked(r, v)，O(1) 位运算</text>
+<rect x="440" y="130" width="334" height="104" rx="4" class="warm"/>
+<text x="454" y="154" class="mono sm b t-warm">_repeated(u, v)：平行边只留一条</text>
+<text x="454" y="176" class="sm">戳记数组 stamp[v] 记「上一个登记它的节点」</text>
+<text x="454" y="196" class="sm">换节点不必清零，每条边 O(1)</text>
+<text x="454" y="216" class="xs mute">回扫先前槽位则是 O(deg²)：扇出 4000 要 1600 万次比较</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 26</span>建立在传递闭包之上，只对 DAG 有唯一解。一步只判一条候选边，单步 O(deg)；整节点一步的话就是 O(deg²)，扇出 4000 时一步 155ms，分帧也让不出去。</figcaption>
+</figure>
+
+
+      <h3><span class="n">9.3</span>最小生成森林</h3>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 292" style="--w:790" role="img" aria-label="Prim 的优先队列排节点，规模 O(V)；Kruskal 的优先队列排边，边扫邻接边入堆，不预先排序"><defs></defs>
+<rect x="16" y="34" width="364" height="176" rx="6" class="band"/>
+<text x="30" y="56" class="b">Prim</text>
+<text x="30" y="74" class="xs mute">队列里是节点：每个树外节点只记一条最轻跨边</text>
+<rect x="410" y="34" width="364" height="176" rx="6" class="band"/>
+<text x="424" y="56" class="b">Kruskal</text>
+<text x="424" y="74" class="xs mute">队列里是边</text>
+<line x1="84.71" y1="123.7" x2="122.54" y2="107.48" class="ln-acc"/>
+<line x1="83.89" y1="137.94" x2="123.5" y2="160.57" class="ln-acc"/>
+<circle cx="70" cy="130" r="10" class="pt-acc"/>
+<text x="70" y="134.5" class="c b sm"></text>
+<circle cx="140" cy="100" r="10" class="pt-acc"/>
+<text x="140" y="104.5" class="c b sm"></text>
+<circle cx="140" cy="170" r="10" class="pt-acc"/>
+<text x="140" y="174.5" class="c b sm"></text>
+<line x1="155.99" y1="99.47" x2="241.01" y2="96.63" class="ln-faint dash"/>
+<circle cx="260" cy="96" r="10" class="pt"/>
+<text x="260" y="100.5" class="c b sm"></text>
+<text x="278" y="100" class="mono xs">reach = 3</text>
+<line x1="154.93" y1="105.74" x2="252.27" y2="143.18" class="ln-faint dash"/>
+<circle cx="270" cy="150" r="10" class="pt"/>
+<text x="270" y="154.5" class="c b sm"></text>
+<text x="288" y="154" class="mono xs">reach = 5</text>
+<line x1="155.57" y1="173.68" x2="231.51" y2="191.63" class="ln-faint dash"/>
+<circle cx="250" cy="196" r="10" class="pt"/>
+<text x="250" y="200.5" class="c b sm"></text>
+<text x="268" y="200" class="mono xs">reach = 2</text>
+<text x="100" y="202" class="c xs t-acc">已入树</text>
+<text x="424" y="100" class="sm">游标逐个走节点，把出边推进堆：</text>
+<rect x="424" y="112" width="74" height="30" rx="4" class="cell-acc"/>
+<text x="461" y="132" class="c mono sm">e3 · 1</text>
+<rect x="506" y="112" width="74" height="30" rx="4" class="cell"/>
+<text x="543" y="132" class="c mono sm">e0 · 2</text>
+<rect x="588" y="112" width="74" height="30" rx="4" class="cell"/>
+<text x="625" y="132" class="c mono sm">e5 · 2</text>
+<rect x="670" y="112" width="74" height="30" rx="4" class="cell"/>
+<text x="707" y="132" class="c mono sm">e1 · 4</text>
+<text x="424" y="166" class="sm">出堆一条边，并查集判两端是否已连通</text>
+<text x="424" y="186" class="xs mute">路径压缩 + 按秩合并：find 近乎 O(1)</text>
+<rect x="16" y="220" width="758" height="66" rx="4" class="warm"/>
+<text x="30" y="244" class="b t-warm">为什么 Kruskal 不先 sort</text>
+<text x="30" y="264" class="xs">排序 O(E log E) 是整个算法的主项。摆进构造函数等于一半工作既不受预算约束也中断不了（E=2 万时构造 12.5ms、推进 14.2ms）。</text>
+<text x="30" y="280" class="xs mute">改成惰性堆后两段都按节点、按边计步，复杂度不变而全程可停。</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 27</span>两种最小生成森林，非连通图都给出每个分量各自的树。生成树是无向概念：Prim 走 <code>mirror</code> 补扫反向邻接，缺入向会漏掉整个分支；Kruskal 只扫出向、每条边正好一次，所以只编出向的结构也能照常跑。</figcaption>
+</figure>
+
+    </section>
+
+    <section id="ordering">
+      <p class="part">PART 10</p>
+      <h2>增量拓扑序</h2>
+      <p class="sub">编辑器里每连一根线都整图重排一次，代价是 O(V+E)。Pearce-Kelly 只动受影响的那一小段。</p>
+
+      <h3><span class="n">10.1</span>只在两端之间重排</h3>
+      <p>插入边 <code>x → y</code> 时，如果 <code>rank[x] &lt; rank[y]</code>，现有顺序已经满足它，什么都不用做。这是编辑器里最常见的情况。只有逆序时才需要重排，而且受影响的只是位次落在 <code>[rank[y], rank[x]]</code> 之间、与两端相连的节点：</p>
+      <figure class="fig">
+  <div class="fig-canvas"><svg viewBox="0 0 790 300" style="--w:790" role="img" aria-label="Pearce-Kelly 增量拓扑序：插入一条逆序边时，只在两端之间的区域里重排位次，其余节点不动"><defs><marker id="kelly-a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="ah" d="M0,1L10,5L0,9z"/></marker></defs>
+<text x="16" y="22" class="cap">插入 x → y 前：rank[x] = 4 ≥ rank[y] = 1，顺序被打破</text>
+<rect x="110" y="40" width="84" height="36" rx="4" class="cell-warm"/>
+<text x="152" y="63" class="c mono b">y</text>
+<text x="152" y="34" class="c mono xs mute">1</text>
+<rect x="206" y="40" width="84" height="36" rx="4" class="cell-acc"/>
+<text x="248" y="63" class="c mono b">a</text>
+<text x="248" y="34" class="c mono xs mute">2</text>
+<rect x="302" y="40" width="84" height="36" rx="4" class="cell-warm"/>
+<text x="344" y="63" class="c mono b">p</text>
+<text x="344" y="34" class="c mono xs mute">3</text>
+<rect x="398" y="40" width="84" height="36" rx="4" class="cell-acc"/>
+<text x="440" y="63" class="c mono b">x</text>
+<text x="440" y="34" class="c mono xs mute">4</text>
+<rect x="494" y="40" width="84" height="36" rx="4" class="cell"/>
+<text x="536" y="63" class="c mono b">q</text>
+<text x="536" y="34" class="c mono xs mute">5</text>
+<text x="100" y="63" class="e xs mute">位次</text>
+<path d="M152,80 Q248,112 344,80" class="ln" marker-end="url(#kelly-a)"/>
+<text x="248" y="116" class="c mono xs mute">y→p</text>
+<path d="M248,80 Q344,112 440,80" class="ln" marker-end="url(#kelly-a)"/>
+<text x="344" y="116" class="c mono xs mute">a→x</text>
+<path d="M440,80 Q488,104 536,80" class="ln" marker-end="url(#kelly-a)"/>
+<text x="488" y="112" class="c mono xs mute">x→q</text>
+<rect x="16" y="132" width="370" height="70" rx="4" class="warm"/>
+<text x="30" y="154" class="sm b t-warm">ahead：从 y 沿出边，位次 ≤ rank[x]</text>
+<text x="30" y="174" class="mono sm">{ y, p }</text>
+<text x="30" y="192" class="xs mute">撞上 x 就是成环，这条边记入 conflicts</text>
+<rect x="404" y="132" width="370" height="70" rx="4" class="acc"/>
+<text x="418" y="154" class="sm b t-acc">behind：从 x 沿入边，位次 ≥ rank[y]</text>
+<text x="418" y="174" class="mono sm">{ a, x }</text>
+<text x="418" y="192" class="xs mute">两区必然不相交，否则上一步已判成环</text>
+<text x="16" y="228" class="cap">收集两区的位次 {1,2,3,4} 排序，先分给 behind，再分给 ahead</text>
+<rect x="110" y="242" width="84" height="36" rx="4" class="cell-acc"/>
+<text x="152" y="265" class="c mono b">a</text>
+<rect x="206" y="242" width="84" height="36" rx="4" class="cell-acc"/>
+<text x="248" y="265" class="c mono b">x</text>
+<rect x="302" y="242" width="84" height="36" rx="4" class="cell-warm"/>
+<text x="344" y="265" class="c mono b">y</text>
+<rect x="398" y="242" width="84" height="36" rx="4" class="cell-warm"/>
+<text x="440" y="265" class="c mono b">p</text>
+<rect x="494" y="242" width="84" height="36" rx="4" class="cell"/>
+<text x="536" y="265" class="c mono b">q</text>
+<text x="100" y="265" class="e xs mute">之后</text>
+<text x="590" y="290" class="c xs mute">q 不在任何一区，位次原地不动</text>
+</svg></div>
+  <figcaption><span class="fig-n">图 28</span><code>Ordering</code> 订阅图事件就地重排。成环的边不触发重算，而是记入 <code>conflicts</code> 并排除在拓扑约束外，剩下的子图始终是 DAG，「编辑器里长期带环」因此不会让每次变更都退化成 O(V+E)。删边后冲突边逐条重试，单趟足够：插入只会增加约束，本趟失败过的边不可能在同一趟后面反而变得可插入。</figcaption>
+</figure>
+
+      <p>全部状态按整数槽位存：位次是一条 <code>Int32Array</code>（存「位次 + 1」，0 表示不在跟踪范围，省掉一条并行的有效位图），冲突边是一个数字 <code>Set</code>，区域搜索走 <code>forEachOutAt</code>。<code>compact()</code> 之后按 <code>compacted</code> 事件给的映射原地搬运，不整图重算。</p>
+      <p>它订阅图事件，所以放在编辑层一侧，不在 <code>algorithm/</code> 目录里。</p>
+    </section>
+
+    <section id="principles">
+      <p class="part">PART 11</p>
+      <h2>设计原则与验证</h2>
+      <p class="sub">前十章里反复出现的几个判断，以及测试是怎么把它们钉住的。</p>
+
+      <h3><span class="n">11.1</span>宁可报错，也不给看起来正常的答案</h3>
+      <p>下面这些位置，恰恰是错答案最容易骗过人的地方。<code>NaN</code> 最典型：它与任何值比较都是 <code>false</code>，于是连通的节点被报成不可达。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>错误</th><th>何时抛</th><th>不抛的话会怎样</th></tr></thead>
+          <tbody>
+            <tr><td><code>Incomplete</code></td><td>任务没跑完就取结果</td><td>把未收敛的中间值当成答案</td></tr>
+            <tr><td><code>Oneway</code></td><td>需要入向，结构只编了出向</td><td>弱连通分量被拆开、生成树漏分支</td></tr>
+            <tr><td><code>Negative</code></td><td>Dijkstra 遇到负权边</td><td>贪心不成立，距离静默错误</td></tr>
+            <tr><td><code>Invalid</code></td><td>边权或点权是 <code>NaN</code></td><td>连通节点被报成不可达</td></tr>
+            <tr><td><code>Oversized</code></td><td>稠密结构超过内存上限</td><td>静默吃掉上 GB 内存</td></tr>
+            <tr><td><code>Stale</code></td><td>快照编译后源图又变了</td><td>在旧结构上算出过期结果</td></tr>
+            <tr><td><code>Cycle</code></td><td>拓扑序遇环、负环</td><td>给出一个不成立的顺序</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>报错的时机也有讲究。跑遍全图的算法在入口一次性验掉 <code>NaN</code>，内层循环不必逐边再判；提前终止的搜索逐边现取现验，因为预扫往往比实际访问的边还多。</p>
+
+      <h3><span class="n">11.2</span>依赖方向写成断言</h3>
+      <p><code>tests/unit/layering.test.ts</code> 读源码里的 import 语句，断言三件事：<code>algorithm/**</code> 一个文件都不 import <code>graph</code> / <code>compile</code> / <code>snapshot</code>；<code>array</code> / <code>ident</code> / <code>slots</code> / <code>socket</code> 的 import 列表为空；算法之间的相互依赖<strong>恰好只有一条</strong>，<code>reach → {component, search}</code>。往某个算法里塞一段公共代码再从另一个模块 import，测试立刻变红。</p>
+      <p>同一个测试文件还真打一次包：入口只导出 <code>scc</code> / <code>settle</code> / <code>toposort</code> 时，产物里不许出现 <code>Graph</code>、<code>Journal</code>、<code>Snapshot</code>、<code>pack</code> 等符号。配一条反向对照：导出 <code>Graph</code> 的入口必须把它们抓出来，否则「什么都没漏」可能只是检测本身失灵了。</p>
+
+      <h3><span class="n">11.3</span>算法靠差分对拍</h3>
+      <p><code>tests/naive.ts</code> 里每个算法都有一份照定义直写、只用公开查询的朴素实现。随机图上把 <code>scc</code>、<code>components</code>、<code>dominators</code>、<code>cuts</code>、<code>closure</code>、最短路的结果与它逐一比对，8 个 seed 各跑一遍。一边是 Pearce、Tarjan、Lengauer-Tarjan 这类带巧思的迭代版本，一边是一眼看得懂的笨办法，哪一侧出错都会暴露。</p>
+
+      <h3><span class="n">11.4</span>复杂度闸门只钉不随机器变的量</h3>
+      <ul>
+        <li><strong>计数</strong>最可靠：单步粒度就数推进步数；「有没有为每个节点付固定重成本」就数 <code>JSON.stringify</code> 调用次数。退化前后常常同阶、只是常数不同，耗时比与噪声重叠，只有计数分得开。</li>
+        <li><strong>同机同轮的对照量</strong>：删边路径拿建图当标尺，排干一张图理应比建它便宜得多。健康时排干只占建图的 15%–60%，退化成平方则是 4.3–8.3 倍，两侧各有一个数量级的余量。</li>
+        <li><strong>同进程的规模比</strong>（规模翻 4 倍，耗时不许涨过 9 倍）只用在编译与最短路这类比值确实稳定的地方。删边路径曾经用过，但缓存与 GC 让线性操作的常数也随数据量增长，4 倍规模实测能涨到 9.1×，与平方的 16× 贴在一起，并行跑整个工作区时必然误报。</li>
+      </ul>
+    </section>
+
+  </main>
+
+  <footer class="end">
+    本文依据 <code>packages/graph</code> 的源码与 README 写成，代码片段与数字均取自仓库。复杂度与实测数据以 <code>tests/integration/scaling.test.ts</code> 和 <code>tests/bench</code> 为准。
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var bar = document.getElementById('progress');
+    function onScroll() {
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      bar.style.width = (max > 0 ? (window.scrollY / max) * 100 : 0) + '%';
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) { a.classList.remove('active'); });
+          var hit = byId[entry.target.id];
+          if (hit) hit.classList.add('active');
+        });
+      }, { rootMargin: '-10% 0px -70% 0px' });
+      document.querySelectorAll('main section').forEach(function (s) { io.observe(s); });
+    }
+  })();
+</script>
+</body>
+</html>
