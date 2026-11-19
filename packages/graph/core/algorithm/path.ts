@@ -45,7 +45,11 @@ export interface PathOptions {
 }
 
 export interface AstarOptions extends PathOptions {
-  /** 到终点的剩余代价估计；不高估真实代价时结果最优。省略即退化成 Dijkstra。 */
+  /**
+   * 到终点的剩余代价估计；省略即退化成 Dijkstra。须满足**一致性**才保证结果最优：对每条边
+   * `u → v` 都有 `h(u) <= w(u, v) + h(v)`。只是不高估真实代价（可采纳）不够，原因与反例见
+   * 文件内 `AStar`。
+   */
   heuristic?: (node: number) => number;
 }
 
@@ -180,7 +184,18 @@ export function trace(tree: Tree, target: number): Int32Array {
   return backtrack(tree.parent, target);
 }
 
-/** A\*：以 `g + h` 为优先级。`heuristic` 不高估真实剩余代价时结果最优。 */
+/**
+ * A\*：以 `g + h` 为优先级。
+ *
+ * @remarks 出队的节点即关闭、不再重开，因此 `heuristic` 必须**一致**——对每条边 `u → v`
+ *   都有 `h(u) <= w(u, v) + h(v)`——才保证结果最优。只是不高估真实剩余代价（可采纳）不够：
+ *   节点可能先以较差的 `g` 出队并关闭，之后找到的更短路径因它已关闭而被丢弃。
+ *
+ *   反例：`s→x` 权 2.5、`s→y` 权 1、`y→x` 权 1、`x→t` 权 1，最短路 `s→y→x→t` 长 3。
+ *   取 `h(y) = 2`、其余为 0：不高估（`y` 到 `t` 恰为 2），但 `h(y) > w(y, x) + h(x)`。
+ *   `x` 以 `f = 2.5` 先于 `y`（`f = 3`）出队并关闭，`y` 再松弛 `y→x` 时被跳过，
+ *   最终返回 `s→x→t`，长 3.5。
+ */
 class AStar extends Stepwise<Route | undefined> {
   private readonly _score: Float64Array;
   private readonly _parent: Int32Array;
